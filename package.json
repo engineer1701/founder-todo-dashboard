@@ -1,0 +1,26 @@
+{
+  "name": "founder-todo-dashboard",
+  "version": "1.0.0",
+  "description": "Founder To-Do Allocation & Follow-Up Dashboard - Developer-Ready Product & Technical Specification",
+  "main": "server/server.js",
+  "scripts": {
+    "server": "node server/server.js",
+    "client": "npm --prefix client run dev",
+    "dev": "node server/server.js",
+    "build:client": "npm --prefix client run build",
+    "test:at": "node server/tests/runAcceptanceTests.js"
+  },
+  "keywords": [
+    "task-management",
+    "founder-dashboard",
+    "reminder-engine",
+    "follow-up"
+  ],
+  "author": "Antigravity Engineering",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "multer": "^2.4.0"
+  }
+}
