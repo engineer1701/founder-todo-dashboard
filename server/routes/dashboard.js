@@ -2,8 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { db, getEffectiveNow } = require('../db/database');
 const { calculateTaskFlags } = require('../services/reminderEngine');
+const { requireRole } = require('../middleware/auth');
 
-router.get('/', (req, res) => {
+router.get('/', requireRole('founder', 'admin'), (req, res, next) => {
   try {
     const effectiveNow = getEffectiveNow();
     const effectiveNowTime = effectiveNow.getTime();
@@ -107,8 +108,7 @@ router.get('/', (req, res) => {
       tasks: enrichedTasks.slice(0, 15) // Recent 15 tasks for quick table preview
     });
   } catch (err) {
-    console.error('[GET /api/dashboard error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 

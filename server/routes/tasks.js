@@ -4,14 +4,10 @@ const { db, getEffectiveNow, getEffectiveNowISO } = require('../db/database');
 const { calculateTaskFlags, sendManualReminder } = require('../services/reminderEngine');
 const { sendEmail } = require('../services/emailService');
 const { logAudit } = require('../services/auditService');
-
-// Middleware to get current user from header (defaults to Founder Vikram ID=1)
-function getCurrentUser(req) {
-  const userIdHeader = req.headers['x-user-id'] || req.query.current_user_id;
-  const userId = userIdHeader ? parseInt(userIdHeader, 10) : 1;
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-  return user || { id: 1, role: 'founder', name: 'Vikram Singhania', email: 'vikram@company.internal' };
-}
+const { ApiError } = require('../middleware/errors');
+const { requireRole } = require('../middleware/auth');
+const { validateBody } = require('../middleware/validate');
+const { schemas } = require('../validation');
 
 // Helper to check if user has access to task
 function checkTaskAccess(taskId, user) {
@@ -29,9 +25,9 @@ function checkTaskAccess(taskId, user) {
 // -------------------------------------------------------------
 // GET /api/tasks - List & filter tasks (Section 8)
 // -------------------------------------------------------------
-router.get('/', (req, res) => {
+router.get('/', (req, res, next) => {
   try {
-    const user = getCurrentUser(req);
+    const user = req.user;
     const {
       status,
       priority,
@@ -162,17 +158,16 @@ router.get('/', (req, res) => {
       tasks: paginated
     });
   } catch (err) {
-    console.error('[GET /api/tasks error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // GET /api/tasks/:id - Task detail (Section 8, US-03, US-05)
 // -------------------------------------------------------------
-router.get('/:id', (req, res) => {
+router.get('/:id', (req, res, next) => {
   try {
-    const user = getCurrentUser(req);
+    const user = req.user;
     const taskId = req.params.id;
 
     const task = db.prepare(`
@@ -186,12 +181,12 @@ router.get('/:id', (req, res) => {
     `).get(taskId);
 
     if (!task) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
+      return next(new ApiError(404, 'NOT_FOUND', 'Task not found.'));
     }
 
     // RBAC: Check access (AT-09)
     if (!checkTaskAccess(taskId, user)) {
-      return res.status(403).json({ success: false, error: 'Access denied: You are not authorized to view this task.' });
+      return next(new ApiError(403, 'ACCESS_DENIED', 'Access denied: You are not assigned to this task.'));
     }
 
     const effectiveNow = getEffectiveNow();
@@ -255,24 +250,23 @@ router.get('/:id', (req, res) => {
         comments,
         reminders,
         attachments,
-        auditTrail
+        auditTrail: user.role === 'employee' ? [] : auditTrail
       }
     });
   } catch (err) {
-    console.error('[GET /api/tasks/:id error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // POST /api/tasks - Create task (Section 8, US-01, AT-01)
 // -------------------------------------------------------------
-router.post('/', (req, res) => {
+router.post('/', requireRole('founder', 'admin'), validateBody(schemas.taskCreate), (req, res, next) => {
   try {
-    const user = getCurrentUser(req);
+    const user = req.user;
     // Only Founder / Admin can create tasks
     if (user.role === 'employee') {
-      return res.status(403).json({ success: false, error: 'Only Founder or Admin can create new tasks.' });
+      return next(new ApiError(403, 'FORBIDDEN', 'Only Founder or Admin can create tasks.'));
     }
 
     const {
@@ -290,10 +284,10 @@ router.post('/', (req, res) => {
     } = req.body;
 
     if (!title || !title.trim()) {
-      return res.status(400).json({ success: false, error: 'Task title is required.' });
+      return next(new ApiError(400, 'VALIDATION_ERROR', 'Task title is required.'));
     }
     if (!deadline_at) {
-      return res.status(400).json({ success: false, error: 'Task deadline is required.' });
+      return next(new ApiError(400, 'VALIDATION_ERROR', 'Task deadline is required.'));
     }
 
     const nowIso = getEffectiveNowISO();
@@ -396,26 +390,25 @@ router.post('/', (req, res) => {
       message: 'Task created successfully'
     });
   } catch (err) {
-    console.error('[POST /api/tasks error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // PUT /api/tasks/:id - Edit task (Section 8, Founder/Admin)
 // -------------------------------------------------------------
-router.put('/:id', (req, res) => {
+router.put('/:id', requireRole('founder', 'admin'), validateBody(schemas.taskUpdate), (req, res, next) => {
   try {
-    const user = getCurrentUser(req);
+    const user = req.user;
     const taskId = req.params.id;
 
     if (user.role === 'employee') {
-      return res.status(403).json({ success: false, error: 'Only Founder or Admin can edit core task specifications.' });
+      return next(new ApiError(403, 'FORBIDDEN', 'Only Founder or Admin can edit core task specifications.'));
     }
 
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
     if (!task) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
+      return next(new ApiError(404, 'NOT_FOUND', 'Task not found.'));
     }
 
     const {
@@ -463,21 +456,20 @@ router.put('/:id', (req, res) => {
 
     res.json({ success: true, message: 'Task updated successfully' });
   } catch (err) {
-    console.error('[PUT /api/tasks/:id error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // POST /api/tasks/:id/assign - Assign/reassign (Section 8, US-02)
 // -------------------------------------------------------------
-router.post('/:id/assign', (req, res) => {
+router.post('/:id/assign', requireRole('founder', 'admin'), validateBody(schemas.assign), (req, res, next) => {
   try {
-    const user = getCurrentUser(req);
+    const user = req.user;
     const taskId = req.params.id;
 
     if (user.role === 'employee') {
-      return res.status(403).json({ success: false, error: 'Only Founder or Admin can assign or reassign tasks.' });
+      return next(new ApiError(403, 'FORBIDDEN', 'Only Founder or Admin can assign or reassign tasks.'));
     }
 
     const { assignee_ids = [], primary_user_id } = req.body;
@@ -485,7 +477,7 @@ router.post('/:id/assign', (req, res) => {
 
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
     if (!task) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
+      return next(new ApiError(404, 'NOT_FOUND', 'Task not found.'));
     }
 
     // Remove existing assignments and replace with new
@@ -533,27 +525,26 @@ router.post('/:id/assign', (req, res) => {
 
     res.json({ success: true, message: 'Assignees updated successfully' });
   } catch (err) {
-    console.error('[POST /api/tasks/:id/assign error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // POST /api/tasks/:id/status - Update status/progress (Section 8, US-04, AT-02, AT-05)
 // -------------------------------------------------------------
-router.post('/:id/status', (req, res) => {
+router.post('/:id/status', validateBody(schemas.status), (req, res, next) => {
   try {
-    const user = getCurrentUser(req);
+    const user = req.user;
     const taskId = req.params.id;
 
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
     if (!task) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
+      return next(new ApiError(404, 'NOT_FOUND', 'Task not found.'));
     }
 
     // RBAC: Check access (AT-09)
     if (!checkTaskAccess(taskId, user)) {
-      return res.status(403).json({ success: false, error: 'Access denied: You cannot update a task you are not assigned to.' });
+      return next(new ApiError(403, 'ACCESS_DENIED', 'Access denied: You are not assigned to this task.'));
     }
 
     const {
@@ -563,7 +554,7 @@ router.post('/:id/status', (req, res) => {
     } = req.body;
 
     if (!remark || !remark.trim()) {
-      return res.status(400).json({ success: false, error: 'A progress remark is required when updating task status.' });
+      return next(new ApiError(400, 'VALIDATION_ERROR', 'A progress remark is required.'));
     }
 
     const oldStatus = task.status;
@@ -643,26 +634,25 @@ router.post('/:id/status', (req, res) => {
       }
     });
   } catch (err) {
-    console.error('[POST /api/tasks/:id/status error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // POST /api/tasks/:id/comments - Add comment (Section 8)
 // -------------------------------------------------------------
-router.post('/:id/comments', (req, res) => {
+router.post('/:id/comments', validateBody(schemas.comment), (req, res, next) => {
   try {
-    const user = getCurrentUser(req);
+    const user = req.user;
     const taskId = req.params.id;
 
     if (!checkTaskAccess(taskId, user)) {
-      return res.status(403).json({ success: false, error: 'Access denied: You cannot comment on this task.' });
+      return next(new ApiError(403, 'ACCESS_DENIED', 'Access denied: You are not assigned to this task.'));
     }
 
     const { comment } = req.body;
     if (!comment || !comment.trim()) {
-      return res.status(400).json({ success: false, error: 'Comment text is required.' });
+      return next(new ApiError(400, 'VALIDATION_ERROR', 'Comment text is required.'));
     }
 
     const nowIso = getEffectiveNowISO();
@@ -682,21 +672,20 @@ router.post('/:id/comments', (req, res) => {
       created_at: nowIso
     });
   } catch (err) {
-    console.error('[POST /api/tasks/:id/comments error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // GET /api/tasks/:id/history - Status & Activity history (Section 8, US-05)
 // -------------------------------------------------------------
-router.get('/:id/history', (req, res) => {
+router.get('/:id/history', (req, res, next) => {
   try {
-    const user = getCurrentUser(req);
+    const user = req.user;
     const taskId = req.params.id;
 
     if (!checkTaskAccess(taskId, user)) {
-      return res.status(403).json({ success: false, error: 'Access denied.' });
+      return next(new ApiError(403, 'ACCESS_DENIED', 'Access denied: You are not assigned to this task.'));
     }
 
     const updates = db.prepare(`
@@ -726,25 +715,24 @@ router.get('/:id/history', (req, res) => {
     res.json({
       success: true,
       updates,
-      audit,
+      audit: user.role === 'employee' ? [] : audit,
       reminders
     });
   } catch (err) {
-    console.error('[GET /api/tasks/:id/history error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // POST /api/tasks/:id/remind - Manual reminder (Section 8)
 // -------------------------------------------------------------
-router.post('/:id/remind', (req, res) => {
+router.post('/:id/remind', requireRole('founder', 'admin'), validateBody(schemas.remind), (req, res, next) => {
   try {
-    const user = getCurrentUser(req);
+    const user = req.user;
     const taskId = req.params.id;
 
     if (user.role === 'employee') {
-      return res.status(403).json({ success: false, error: 'Only Founder or Admin can send manual reminders.' });
+      return next(new ApiError(403, 'FORBIDDEN', 'Only Founder or Admin can send manual reminders.'));
     }
 
     const { message } = req.body;
@@ -756,26 +744,25 @@ router.post('/:id/remind', (req, res) => {
       results: sent
     });
   } catch (err) {
-    console.error('[POST /api/tasks/:id/remind error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // POST /api/tasks/:id/attachments - Add attachment
 // -------------------------------------------------------------
-router.post('/:id/attachments', (req, res) => {
+router.post('/:id/attachments', validateBody(schemas.attachment), (req, res, next) => {
   try {
-    const user = getCurrentUser(req);
+    const user = req.user;
     const taskId = req.params.id;
 
     if (!checkTaskAccess(taskId, user)) {
-      return res.status(403).json({ success: false, error: 'Access denied.' });
+      return next(new ApiError(403, 'ACCESS_DENIED', 'Access denied: You are not assigned to this task.'));
     }
 
     const { file_name, file_url, file_size = 102400, file_type = 'application/pdf' } = req.body;
     if (!file_name) {
-      return res.status(400).json({ success: false, error: 'File name is required' });
+      return next(new ApiError(400, 'VALIDATION_ERROR', 'File name is required.'));
     }
 
     const nowIso = getEffectiveNowISO();
@@ -795,8 +782,7 @@ router.post('/:id/attachments', (req, res) => {
       created_at: nowIso
     });
   } catch (err) {
-    console.error('[POST /api/tasks/:id/attachments error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 

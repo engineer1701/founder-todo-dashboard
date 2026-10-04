@@ -52,12 +52,12 @@ export default function TaskDetailModal({
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch(`/api/tasks/${taskId}`, {
-        headers: { 'x-user-id': currentUser?.id || 1 }
-      });
+      const res = await fetch(`/api/tasks/${taskId}`, { credentials: 'include' });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to load task details');
+        const error = new Error(data.error?.message || data.error || 'Failed to load task details');
+        error.status = res.status;
+        throw error;
       }
       setTask(data.task);
       setNewStatus(data.task.status);
@@ -123,6 +123,18 @@ export default function TaskDetailModal({
   const isFounderOrAdmin = currentUser?.role === 'founder' || currentUser?.role === 'admin';
 
   if (!taskId) return null;
+
+  if (error?.status === 403) {
+    return (
+      <main className="access-denied-page">
+        <section>
+          <h1>Access denied</h1>
+          <p>You are not assigned to task {taskId}.</p>
+          <button className="btn-primary" onClick={onClose}>Return to my tasks</button>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>

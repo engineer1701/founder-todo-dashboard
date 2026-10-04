@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { useAuth } from './auth/AuthContext';
 import Header from './components/Header';
+import LoginView from './components/LoginView';
 import SimulationBar from './components/SimulationBar';
 import DashboardView from './components/DashboardView';
 import EmployeeView from './components/EmployeeView';
@@ -10,10 +12,12 @@ import AcceptanceTestsView from './components/AcceptanceTestsView';
 import TaskDetailModal from './components/TaskDetailModal';
 import CreateTaskModal from './components/CreateTaskModal';
 
+const apiErrorMessage = (data, fallback) => data?.error?.message || data?.error || fallback;
+
 export default function App() {
+  const { user: currentUser, loading: authLoading, devToolsEnabled, logout, switchDevUser } = useAuth();
   const [activeNav, setActiveNav] = useState('dashboard');
   const [users, setUsers] = useState([]);
-  const [currentUser, setCurrentUser] = useState(null);
   const [departments, setDepartments] = useState([]);
   const [policies, setPolicies] = useState([]);
   const [dashboardData, setDashboardData] = useState(null);
@@ -39,28 +43,33 @@ export default function App() {
   // Initial Data Fetch
   const fetchMetadata = async () => {
     try {
-      const [usersRes, deptsRes, policiesRes] = await Promise.all([
-        fetch('/api/auth/users'),
-        fetch('/api/auth/departments'),
-        fetch('/api/settings/reminders')
-      ]);
-
-      const usersData = await usersRes.json();
-      const deptsData = await deptsRes.json();
-      const policiesData = await policiesRes.json();
-
-      if (usersData.success) {
-        setUsers(usersData.users);
-        if (!currentUser && usersData.users.length > 0) {
-          // Default to Founder Vikram
-          setCurrentUser(usersData.users[0]);
-        }
+      if (!currentUser) return;
+      const isManager = ['founder', 'admin'].includes(currentUser.role);
+      if (!isManager && !import.meta.env.DEV) {
+        setUsers([currentUser]);
+        setDepartments([]);
+        setPolicies([]);
+        return;
       }
-      if (deptsData.success) setDepartments(deptsData.departments);
-      if (policiesData.success) {
-        setPolicies(policiesData.policies);
-        if (policiesData.config?.simulated_now_offset_hours) {
-          setTimeOffsetHours(parseFloat(policiesData.config.simulated_now_offset_hours) || 0);
+
+      const userEndpoint = isManager ? '/api/auth/users' : '/api/auth/dev-users';
+      const usersRes = await fetch(userEndpoint, { credentials: 'include' });
+      const usersData = await usersRes.json();
+      if (usersData.success) setUsers(usersData.users);
+
+      if (isManager) {
+        const [deptsRes, policiesRes] = await Promise.all([
+          fetch('/api/auth/departments', { credentials: 'include' }),
+          fetch('/api/settings/reminders', { credentials: 'include' })
+        ]);
+        const deptsData = await deptsRes.json();
+        const policiesData = await policiesRes.json();
+        if (deptsData.success) setDepartments(deptsData.departments);
+        if (policiesData.success) {
+          setPolicies(policiesData.policies);
+          if (policiesData.config?.simulated_now_offset_hours) {
+            setTimeOffsetHours(parseFloat(policiesData.config.simulated_now_offset_hours) || 0);
+          }
         }
       }
     } catch (err) {
@@ -70,17 +79,17 @@ export default function App() {
 
   const fetchDashboardAndTasks = async () => {
     try {
+      if (!currentUser) return;
       setLoading(true);
-      const userId = currentUser?.id || 1;
-      const [dashRes, tasksRes] = await Promise.all([
-        fetch('/api/dashboard', { headers: { 'x-user-id': userId } }),
-        fetch('/api/tasks', { headers: { 'x-user-id': userId } })
-      ]);
-
-      const dashData = await dashRes.json();
+      const isManager = ['founder', 'admin'].includes(currentUser.role);
+      const requests = [fetch('/api/tasks', { credentials: 'include' })];
+      if (isManager) requests.unshift(fetch('/api/dashboard', { credentials: 'include' }));
+      const responses = await Promise.all(requests);
+      const dashData = isManager ? await responses[0].json() : null;
+      const tasksRes = responses[isManager ? 1 : 0];
       const tasksData = await tasksRes.json();
 
-      if (dashData.success) setDashboardData(dashData);
+      setDashboardData(dashData?.success ? dashData : null);
       if (tasksData.success) setTasks(tasksData.tasks);
     } catch (err) {
       console.error('Error loading tasks:', err);
@@ -90,11 +99,12 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchMetadata();
-  }, []);
+    if (!authLoading && currentUser) fetchMetadata();
+  }, [authLoading, currentUser]);
 
   useEffect(() => {
     if (currentUser) {
+      if (currentUser.role === 'employee') setActiveNav('employee');
       fetchDashboardAndTasks();
     }
   }, [currentUser]);
@@ -109,16 +119,13 @@ export default function App() {
   }, []);
 
   // Switch Logged-in User
-  const handleSwitchUser = (userId) => {
-    const user = users.find((u) => u.id === userId);
-    if (user) {
-      setCurrentUser(user);
-      if (user.role === 'employee') {
-        setActiveNav('employee');
-        addToast(`Switched to employee view: ${user.name}`, 'info');
-      } else {
-        addToast(`Switched to management view: ${user.name}`, 'info');
-      }
+  const handleSwitchUser = async (userId) => {
+    try {
+      await switchDevUser(userId);
+      const user = users.find((item) => item.id === userId);
+      setActiveNav(user?.role === 'employee' ? 'employee' : 'dashboard');
+    } catch (error) {
+      addToast(error.message, 'error');
     }
   };
 
@@ -126,15 +133,15 @@ export default function App() {
   const handleCreateTask = async (taskPayload) => {
     const res = await fetch('/api/tasks', {
       method: 'POST',
+      credentials: 'include',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser?.id || 1
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(taskPayload)
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to create task');
+      throw new Error(apiErrorMessage(data, 'Failed to create task'));
     }
     addToast(`Task ${data.taskId} allocated successfully!`, 'success');
     await fetchDashboardAndTasks();
@@ -144,15 +151,15 @@ export default function App() {
   const handleUpdateStatus = async (taskId, status, remark, progress_pct) => {
     const res = await fetch(`/api/tasks/${taskId}/status`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser?.id || 1
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({ status, remark, progress_pct })
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to update status');
+      throw new Error(apiErrorMessage(data, 'Failed to update status'));
     }
     addToast(`Status updated: ${status}. Inactivity timer reset!`, 'success');
     await fetchDashboardAndTasks();
@@ -162,15 +169,15 @@ export default function App() {
   const handleAddComment = async (taskId, comment) => {
     const res = await fetch(`/api/tasks/${taskId}/comments`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser?.id || 1
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({ comment })
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to add comment');
+      throw new Error(apiErrorMessage(data, 'Failed to add comment'));
     }
     addToast('Comment added', 'info');
     await fetchDashboardAndTasks();
@@ -181,14 +188,14 @@ export default function App() {
     try {
       const res = await fetch(`/api/tasks/${taskId}/remind`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': currentUser?.id || 1
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({ message: 'Management follow-up request' })
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to remind');
+      if (!res.ok || !data.success) throw new Error(apiErrorMessage(data, 'Failed to remind'));
       addToast(`Follow-up nudge dispatched to assignee for ${taskId}!`, 'success');
       await fetchDashboardAndTasks();
     } catch (err) {
@@ -200,14 +207,14 @@ export default function App() {
   const handleReassign = async (taskId, assigneeIds, primaryUserId) => {
     const res = await fetch(`/api/tasks/${taskId}/assign`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser?.id || 1
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({ assignee_ids: assigneeIds, primary_user_id: primaryUserId })
     });
     const data = await res.json();
-    if (!res.ok || !data.success) throw new Error(data.error || 'Failed to reassign');
+    if (!res.ok || !data.success) throw new Error(apiErrorMessage(data, 'Failed to reassign'));
     addToast(`Task ${taskId} reassigned`, 'success');
     await fetchDashboardAndTasks();
   };
@@ -216,11 +223,12 @@ export default function App() {
   const handleUpdatePolicy = async (payload) => {
     const res = await fetch('/api/settings/reminders', {
       method: 'PUT',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
     const data = await res.json();
-    if (!res.ok || !data.success) throw new Error(data.error || 'Failed to update policy');
+    if (!res.ok || !data.success) throw new Error(apiErrorMessage(data, 'Failed to update policy'));
     addToast('Reminder policy updated dynamically without code restart (AT-12)', 'success');
     await fetchMetadata();
     await fetchDashboardAndTasks();
@@ -230,6 +238,7 @@ export default function App() {
   const handleAdvanceTime = async (hours) => {
     const res = await fetch('/api/settings/simulate-time', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ advance_hours: hours })
     });
@@ -246,6 +255,7 @@ export default function App() {
   const handleResetTime = async () => {
     const res = await fetch('/api/settings/simulate-time', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reset: true })
     });
@@ -262,7 +272,7 @@ export default function App() {
   const handleRunScheduler = async () => {
     setSchedulerRunning(true);
     try {
-      const res = await fetch('/api/settings/scheduler/run', { method: 'POST' });
+      const res = await fetch('/api/settings/scheduler/run', { method: 'POST', credentials: 'include' });
       const data = await res.json();
       if (data.success) {
         addToast(
@@ -279,6 +289,11 @@ export default function App() {
     }
   };
 
+  if (authLoading) {
+    return <main className="auth-loading">Checking your session…</main>;
+  }
+  if (!currentUser) return <LoginView />;
+
   return (
     <div className="app-container">
       {/* Header with Brand & Role Switcher */}
@@ -288,17 +303,19 @@ export default function App() {
         users={users}
         currentUser={currentUser}
         onSwitchUser={handleSwitchUser}
+        onLogout={logout}
+        devToolsEnabled={devToolsEnabled}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
       />
 
       {/* Simulation Bar for Live Time Travel & Fast Verification */}
-      <SimulationBar
+      {devToolsEnabled && ['founder', 'admin'].includes(currentUser.role) && <SimulationBar
         timeOffsetHours={timeOffsetHours}
         onAdvanceTime={handleAdvanceTime}
         onResetTime={handleResetTime}
         onRunScheduler={handleRunScheduler}
         schedulerRunning={schedulerRunning}
-      />
+      />}
 
       {/* Main View Router */}
       <main className="main-wrapper">
@@ -334,6 +351,7 @@ export default function App() {
 
         {activeNav === 'mailbox' && (
           <MailboxView
+            isManager={['founder', 'admin'].includes(currentUser.role)}
             onOpenTaskFromEmail={(id) => {
               setSelectedTaskId(id);
               setActiveNav('dashboard');

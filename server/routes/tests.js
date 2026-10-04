@@ -4,8 +4,9 @@ const { db, getEffectiveNow, getEffectiveNowISO } = require('../db/database');
 const { runReminderScan, calculateTaskFlags } = require('../services/reminderEngine');
 const { sendEmail } = require('../services/emailService');
 const { logAudit } = require('../services/auditService');
+const { requireDevToolAccess } = require('../middleware/auth');
 
-router.get('/run', async (req, res) => {
+router.get('/run', requireDevToolAccess, async (req, res, next) => {
   const results = [];
   function assert(condition, message) {
     if (!condition) throw new Error(message);
@@ -418,8 +419,7 @@ router.get('/run', async (req, res) => {
       results
     });
   } catch (err) {
-    console.error('[Acceptance Tests Error]', err);
-    res.status(500).json({ success: false, error: err.message, results });
+    next(err);
   }
 });
 

@@ -2,8 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { db, getEffectiveNow } = require('../db/database');
 const { calculateTaskFlags } = require('../services/reminderEngine');
+const { requireRole } = require('../middleware/auth');
 
-router.get('/tasks', (req, res) => {
+router.get('/tasks', requireRole('founder', 'admin'), (req, res, next) => {
   try {
     const effectiveNow = getEffectiveNow();
     const { department_id, start_date, end_date } = req.query;
@@ -99,8 +100,7 @@ router.get('/tasks', (req, res) => {
       employeeReports
     });
   } catch (err) {
-    console.error('[GET /api/reports/tasks error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 

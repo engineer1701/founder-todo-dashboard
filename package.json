@@ -1,14 +1,19 @@
 {
   "name": "founder-todo-dashboard",
   "version": "1.0.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "description": "Founder To-Do Allocation & Follow-Up Dashboard - Developer-Ready Product & Technical Specification",
   "main": "server/server.js",
   "scripts": {
-    "server": "node server/server.js",
+    "server": "cross-env NODE_ENV=development NODE_OPTIONS=--experimental-sqlite node server/server.js",
     "client": "npm --prefix client run dev",
-    "dev": "node server/server.js",
+    "dev": "cross-env NODE_ENV=development NODE_OPTIONS=--experimental-sqlite node server/server.js",
+    "start": "cross-env NODE_OPTIONS=--experimental-sqlite node server/server.js",
+    "setup": "npm install && npm --prefix client install",
     "build:client": "npm --prefix client run build",
-    "test:at": "node server/tests/runAcceptanceTests.js"
+    "test:at": "cross-env NODE_OPTIONS=--experimental-sqlite node server/tests/runAcceptanceTests.js"
   },
   "keywords": [
     "task-management",
@@ -19,8 +24,16 @@
   "author": "Antigravity Engineering",
   "license": "ISC",
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
+    "dotenv": "^18.0.5",
     "express": "^5.2.1",
-    "multer": "^2.4.0"
+    "express-rate-limit": "^8.7.0",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.4.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0"
   }
 }

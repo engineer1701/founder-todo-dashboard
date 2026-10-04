@@ -1,6 +1,8 @@
 const { DatabaseSync } = require('node:sqlite');
 const path = require('node:path');
 const fs = require('node:fs');
+const bcrypt = require('bcryptjs');
+const { runMigrations } = require('./migrate');
 
 const dbPath = path.join(__dirname, '..', 'data', 'tasks.db');
 const schemaPath = path.join(__dirname, 'schema.sql');
@@ -17,16 +19,38 @@ db.exec('PRAGMA foreign_keys = ON;');
 db.exec('PRAGMA journal_mode = WAL;');
 
 function initDatabase() {
-  const schema = fs.readFileSync(schemaPath, 'utf8');
-  db.exec(schema);
+  if (process.env.NODE_ENV === 'production' && !process.env.ADMIN_INITIAL_PASSWORD) {
+    throw new Error('ADMIN_INITIAL_PASSWORD is required in production.');
+  }
+
+  runMigrations(db);
 
   const seed = fs.readFileSync(seedPath, 'utf8');
   db.exec(seed);
+  initializeSeedPasswords();
 
   // Check if we already have initial sample tasks; if not, populate standard demonstration tasks
   const taskCount = db.prepare('SELECT COUNT(*) as count FROM tasks').get().count;
   if (taskCount === 0) {
     seedInitialTasks();
+  }
+}
+
+function initializeSeedPasswords() {
+  if (process.env.NODE_ENV === 'production') {
+    const admin = db.prepare("SELECT id, password_hash FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").get();
+    if (admin && !admin.password_hash) {
+      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?')
+        .run(bcrypt.hashSync(process.env.ADMIN_INITIAL_PASSWORD, 12), admin.id);
+    }
+    return;
+  }
+
+  const missingPasswords = db.prepare('SELECT COUNT(*) AS count FROM users WHERE password_hash IS NULL').get().count;
+  if (missingPasswords > 0) {
+    const devPassword = process.env.DEV_SEED_PASSWORD || 'FounderDev2026!';
+    const passwordHash = bcrypt.hashSync(devPassword, 12);
+    db.prepare('UPDATE users SET password_hash = ? WHERE password_hash IS NULL').run(passwordHash);
   }
 }
 

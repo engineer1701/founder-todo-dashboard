@@ -3,11 +3,17 @@ const router = express.Router();
 const { db, getEffectiveNow, getEffectiveNowISO } = require('../db/database');
 const { runReminderScan } = require('../services/reminderEngine');
 const { logAudit } = require('../services/auditService');
+const { requireDevToolAccess, requireRole } = require('../middleware/auth');
+const { ApiError } = require('../middleware/errors');
+const { validateBody } = require('../middleware/validate');
+const { schemas } = require('../validation');
+
+router.use(requireRole('founder', 'admin'));
 
 // -------------------------------------------------------------
 // GET /api/settings/reminders - Get reminder settings (Section 8)
 // -------------------------------------------------------------
-router.get('/reminders', (req, res) => {
+router.get('/reminders', (req, res, next) => {
   try {
     const policies = db.prepare('SELECT * FROM reminder_policies ORDER BY id ASC').all();
     const configRows = db.prepare('SELECT key, value FROM system_config').all();
@@ -22,21 +28,20 @@ router.get('/reminders', (req, res) => {
       config
     });
   } catch (err) {
-    console.error('[GET /api/settings/reminders error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // PUT /api/settings/reminders - Update reminder settings (Section 8, AT-12)
 // -------------------------------------------------------------
-router.put('/reminders', (req, res) => {
+router.put('/reminders', validateBody(schemas.reminderSettings), (req, res, next) => {
   try {
     const { policy_id, first_reminder_hours, second_reminder_hours, escalation_hours, deadline_reminder_hours, repeat_enabled, enabled } = req.body;
     const nowIso = getEffectiveNowISO();
 
     if (!policy_id) {
-      return res.status(400).json({ success: false, error: 'policy_id is required' });
+      return next(new ApiError(400, 'VALIDATION_ERROR', 'policy_id is required.'));
     }
 
     db.prepare(`
@@ -60,7 +65,7 @@ router.put('/reminders', (req, res) => {
       parseInt(policy_id, 10)
     );
 
-    logAudit(null, 1, 'REMINDER_SETTINGS_UPDATED', req.body);
+    logAudit(null, req.user.id, 'REMINDER_SETTINGS_UPDATED', req.body);
 
     const updated = db.prepare('SELECT * FROM reminder_policies WHERE id = ?').get(policy_id);
 
@@ -70,24 +75,23 @@ router.put('/reminders', (req, res) => {
       policy: updated
     });
   } catch (err) {
-    console.error('[PUT /api/settings/reminders error]', err);
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // GET & PUT /api/settings/templates - Email Templates Management
 // -------------------------------------------------------------
-router.get('/templates', (req, res) => {
+router.get('/templates', (req, res, next) => {
   try {
     const templates = db.prepare('SELECT * FROM email_templates ORDER BY id ASC').all();
     res.json({ success: true, templates });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
-router.put('/templates/:id', (req, res) => {
+router.put('/templates/:id', validateBody(schemas.template), (req, res, next) => {
   try {
     const { id } = req.params;
     const { subject, body, enabled } = req.body;
@@ -108,17 +112,17 @@ router.put('/templates/:id', (req, res) => {
       parseInt(id, 10)
     );
 
-    logAudit(null, 1, 'EMAIL_TEMPLATE_UPDATED', { templateId: id });
+    logAudit(null, req.user.id, 'EMAIL_TEMPLATE_UPDATED', { templateId: id });
     res.json({ success: true, message: 'Template updated successfully' });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // System Config (Business hours, timezone, simulated time offset)
 // -------------------------------------------------------------
-router.put('/config', (req, res) => {
+router.put('/config', validateBody(schemas.config), (req, res, next) => {
   try {
     const { config } = req.body; // { key: value }
     const nowIso = getEffectiveNowISO();
@@ -133,14 +137,14 @@ router.put('/config', (req, res) => {
 
     res.json({ success: true, message: 'Configuration saved' });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // Manual Trigger / Simulator for Scheduler pass
 // -------------------------------------------------------------
-router.post('/scheduler/run', (req, res) => {
+router.post('/scheduler/run', requireDevToolAccess, validateBody(schemas.empty), (req, res, next) => {
   try {
     const result = runReminderScan();
     res.json({
@@ -149,14 +153,14 @@ router.post('/scheduler/run', (req, res) => {
       result
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 
 // -------------------------------------------------------------
 // Time Simulation: fast-forward system time to test inactivity thresholds
 // -------------------------------------------------------------
-router.post('/simulate-time', (req, res) => {
+router.post('/simulate-time', requireDevToolAccess, validateBody(schemas.simulateTime), (req, res, next) => {
   try {
     const { advance_hours, reset } = req.body;
     let newOffset = 0;
@@ -185,7 +189,7 @@ router.post('/simulate-time', (req, res) => {
       simulated_time_ist: effectiveNow.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    next(err);
   }
 });
 

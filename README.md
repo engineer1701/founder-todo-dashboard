@@ -3,7 +3,7 @@
 > *Internal Task Management & Autonomous Reminder Automation for High-Growth Startups*
 
 [![Acceptance Tests](https://img.shields.io/badge/Acceptance%20Tests-12%2F12%20PASSED-success?style=for-the-badge&logo=checkmarx)](docs/ACCEPTANCE_TEST_REPORT.md)
-[![Node Version](https://img.shields.io/badge/Node.js-v22+-339933?style=for-the-badge&logo=node.js)](https://nodejs.org)
+[![Node Version](https://img.shields.io/badge/Node.js-v22.5%2B-339933?style=for-the-badge&logo=node.js)](https://nodejs.org)
 [![SQLite Mode](https://img.shields.io/badge/SQLite-WAL%20Mode-003B57?style=for-the-badge&logo=sqlite)](server/db/database.js)
 [![React](https://img.shields.io/badge/React-19%20SPA-61DAFB?style=for-the-badge&logo=react)](client)
 
@@ -50,13 +50,15 @@ founder-todo-dashboard/
 ## 🚀 Quick Start Guide
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) v20 or v22+
+- [Node.js](https://nodejs.org/) v22.5.0 or later (required for `node:sqlite`)
 - NPM v10+
+
+Node.js 22.5 through 22.x prints an `ExperimentalWarning` for `node:sqlite` and requires `--experimental-sqlite`. The `server`, `dev`, `start`, and `test:at` scripts supply that flag automatically. Later Node releases may continue to print the warning depending on their SQLite stability status.
 
 ### Installation & Build
 ```bash
-# 1. Install root backend dependencies
-npm install
+# Install root backend and client dependencies
+npm run setup
 
 # 2. Build the optimized production client bundle
 npm run build:client
@@ -64,14 +66,14 @@ npm run build:client
 
 ### Running the Application
 ```bash
-# Start unified server on http://localhost:5000
+# Start the development server on http://localhost:5000
 npm run server
 ```
 
 The application is immediately accessible at:
 👉 **`http://localhost:5000`**
 
-*(Note: For live frontend HMR during UI development, you can run `npm run client` concurrently on port 5173).*
+*(For live frontend HMR during UI development, run `npm run client` concurrently on port 5173.)*
 
 ---
 
@@ -115,7 +117,11 @@ The database comes pre-seeded with realistic team members for testing:
 | **Amit Verma** | `employee` | `amit.verma@company.internal` | Growth & Marketing |
 | **Neha Gupta** | `employee` | `neha.gupta@company.internal` | Customer Operations |
 
-*Tip: Use the User Switcher in the top-right header to seamlessly switch personas and test RBAC permissions.*
+Development seed accounts all use the password `FounderDev2026!` unless `DEV_SEED_PASSWORD` is set. This development-only default is not assigned in production. The persona switcher is a development tool and is hidden outside development mode.
+
+Production requires `SESSION_SECRET` and `ADMIN_INITIAL_PASSWORD`. Set them in the environment or `.env` before starting with `NODE_ENV=production`; startup refuses to proceed if either is missing. The initial password is assigned to the seeded Admin account only when it has no password hash.
+
+Copy `.env.example` to `.env` for local configuration. Replace the example session secret before using the app beyond local development.
 
 ---
 

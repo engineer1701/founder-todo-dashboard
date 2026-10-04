@@ -16,6 +16,8 @@ export default function Header({
   users,
   currentUser,
   onSwitchUser,
+  onLogout,
+  devToolsEnabled,
   onOpenCreateModal
 }) {
   const isFounderOrAdmin = currentUser?.role === 'founder' || currentUser?.role === 'admin';
@@ -38,14 +40,14 @@ export default function Header({
       </div>
 
       <nav className="header-nav">
-        <button
+        {isFounderOrAdmin && <button
           className={`nav-link ${activeNav === 'dashboard' ? 'active' : ''}`}
           onClick={() => setActiveNav('dashboard')}
           id="nav-dashboard-btn"
         >
           <LayoutDashboard size={16} />
           Founder Dashboard
-        </button>
+        </button>}
 
         <button
           className={`nav-link ${activeNav === 'employee' ? 'active' : ''}`}
@@ -56,14 +58,14 @@ export default function Header({
           My Tasks
         </button>
 
-        <button
+        {isFounderOrAdmin && <button
           className={`nav-link ${activeNav === 'reports' ? 'active' : ''}`}
           onClick={() => setActiveNav('reports')}
           id="nav-reports-btn"
         >
           <BarChart3 size={16} />
           Reports
-        </button>
+        </button>}
 
         <button
           className={`nav-link ${activeNav === 'mailbox' ? 'active' : ''}`}
@@ -74,23 +76,23 @@ export default function Header({
           Email Simulator
         </button>
 
-        <button
+        {devToolsEnabled && isFounderOrAdmin && <button
           className={`nav-link ${activeNav === 'tests' ? 'active' : ''}`}
           onClick={() => setActiveNav('tests')}
           id="nav-tests-btn"
         >
           <ShieldCheck size={16} />
           Acceptance Tests
-        </button>
+        </button>}
 
-        <button
+        {isFounderOrAdmin && <button
           className={`nav-link ${activeNav === 'settings' ? 'active' : ''}`}
           onClick={() => setActiveNav('settings')}
           id="nav-settings-btn"
         >
           <Settings size={16} />
           Settings
-        </button>
+        </button>}
       </nav>
 
       <div className="header-actions">
@@ -105,14 +107,14 @@ export default function Header({
           </button>
         )}
 
-        <div className="role-switcher-card" title="Switch User Role to test RBAC & Employee view">
+        {import.meta.env.DEV && users.length > 0 && <div className="role-switcher-card" title="Development tool: switch persona">
           <img
             src={currentUser?.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=160&q=80'}
             alt={currentUser?.name}
             className="role-avatar"
           />
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ fontSize: '0.65rem', color: '#94a3b8', lineHeight: 1 }}>Logged In As</span>
+            <span style={{ fontSize: '0.65rem', color: '#fbbf24', lineHeight: 1 }}>DEV TOOL · Switch persona</span>
             <select
               className="role-select"
               value={currentUser?.id || 1}
@@ -126,7 +128,11 @@ export default function Header({
               ))}
             </select>
           </div>
-        </div>
+        </div>}
+
+        <button className="nav-link" onClick={onLogout} aria-label="Log out" title="Log out">
+          Log out
+        </button>
       </div>
     </header>
   );

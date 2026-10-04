@@ -1,6 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('node:path');
+require('dotenv').config();
+const { assertSecurityEnvironment, requireAuth } = require('./middleware/auth');
+const { errorHandler } = require('./middleware/errors');
+assertSecurityEnvironment();
 const { initDatabase } = require('./db/database');
 const { runReminderScan } = require('./services/reminderEngine');
 
@@ -11,7 +15,10 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+  credentials: true
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -23,14 +30,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// API Routes
-app.use('/api/tasks', require('./routes/tasks'));
-app.use('/api/dashboard', require('./routes/dashboard'));
-app.use('/api/reports', require('./routes/reports'));
-app.use('/api/settings', require('./routes/settings'));
+// Public authentication endpoints
 app.use('/api/auth', require('./routes/auth'));
-app.use('/api/emails', require('./routes/emails'));
-app.use('/api/tests', require('./routes/tests'));
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -41,6 +42,20 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// All remaining API routes require a signed session cookie.
+app.use('/api', requireAuth);
+app.use('/api/tasks', require('./routes/tasks'));
+app.use('/api/dashboard', require('./routes/dashboard'));
+app.use('/api/reports', require('./routes/reports'));
+app.use('/api/settings', require('./routes/settings'));
+app.use('/api/emails', require('./routes/emails'));
+app.use('/api/tests', require('./routes/tests'));
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: { code: 'NOT_FOUND', message: 'API route not found.' } });
+});
+
+app.use(errorHandler);
 
 // Serve frontend in production if built
 const clientDistPath = path.join(__dirname, '..', 'client', 'dist');

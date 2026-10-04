@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Mail, RefreshCw, Trash2, ExternalLink, Send, CheckCircle2 } from 'lucide-react';
 
-export default function MailboxView({ onOpenTaskFromEmail }) {
+export default function MailboxView({ onOpenTaskFromEmail, isManager }) {
   const [emails, setEmails] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedEmail, setSelectedEmail] = useState(null);
@@ -55,7 +55,7 @@ export default function MailboxView({ onOpenTaskFromEmail }) {
           <button className="btn-secondary" onClick={fetchEmails} title="Refresh Live Mailbox">
             <RefreshCw size={14} /> Refresh
           </button>
-          {emails.length > 0 && (
+          {isManager && emails.length > 0 && (
             <button className="btn-secondary" onClick={handleClearInbox} style={{ color: '#dc2626' }}>
               <Trash2 size={14} /> Clear Mailbox
             </button>
