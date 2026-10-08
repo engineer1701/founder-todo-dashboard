@@ -155,15 +155,19 @@ export default function MailboxView({ onOpenTaskFromEmail, isManager }) {
               </div>
 
               {/* Rendered HTML Email Body */}
-              <div
+              <iframe
+                title={`Email preview: ${selectedEmail.subject}`}
+                sandbox=""
+                referrerPolicy="no-referrer"
                 style={{
-                  padding: '1.75rem',
+                  width: '100%',
                   flex: 1,
+                  border: 0,
+                  padding: '1rem',
                   overflowY: 'auto',
-                  lineHeight: 1.6,
-                  fontFamily: 'sans-serif'
+                  background: '#ffffff'
                 }}
-                dangerouslySetInnerHTML={{ __html: selectedEmail.body_html }}
+                srcDoc={selectedEmail.body_html}
               />
             </>
           ) : (

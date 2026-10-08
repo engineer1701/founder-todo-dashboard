@@ -8,6 +8,8 @@ const { ApiError } = require('../middleware/errors');
 const { requireRole } = require('../middleware/auth');
 const { validateBody } = require('../middleware/validate');
 const { schemas } = require('../validation');
+const { getAllowedNextStatuses, isStatusTransitionAllowed } = require('../services/statusRules');
+const { withTransaction } = require('../db/transaction');
 
 // Helper to check if user has access to task
 function checkTaskAccess(taskId, user) {
@@ -246,6 +248,7 @@ router.get('/:id', (req, res, next) => {
         assignees,
         primary_assignee: assignees.find(a => a.responsibility_type === 'primary') || assignees[0] || null,
         ...flags,
+        allowed_statuses: getAllowedNextStatuses(task.status, user.role),
         updates,
         comments,
         reminders,
@@ -559,6 +562,9 @@ router.post('/:id/status', validateBody(schemas.status), (req, res, next) => {
 
     const oldStatus = task.status;
     const newStatus = status || oldStatus;
+    if (!isStatusTransitionAllowed(oldStatus, newStatus, user.role)) {
+      return next(new ApiError(422, 'INVALID_STATUS_TRANSITION', 'This status transition is not allowed for your role.'));
+    }
     const newProgress = progress_pct !== undefined ? parseInt(progress_pct, 10) : task.progress_pct;
     const nowIso = getEffectiveNowISO();
 
@@ -602,7 +608,7 @@ router.post('/:id/status', validateBody(schemas.status), (req, res, next) => {
 
     // 4. If marked completed, notify Founder (Section 12)
     if (newStatus === 'Completed' && oldStatus !== 'Completed') {
-      const founder = db.prepare('SELECT * FROM users WHERE role = "founder" LIMIT 1').get();
+      const founder = db.prepare("SELECT * FROM users WHERE role = 'founder' LIMIT 1").get();
       if (founder) {
         sendEmail({
           taskId,
@@ -726,7 +732,7 @@ router.get('/:id/history', (req, res, next) => {
 // -------------------------------------------------------------
 // POST /api/tasks/:id/remind - Manual reminder (Section 8)
 // -------------------------------------------------------------
-router.post('/:id/remind', requireRole('founder', 'admin'), validateBody(schemas.remind), (req, res, next) => {
+router.post('/:id/remind', requireRole('founder', 'admin'), validateBody(schemas.remind), async (req, res, next) => {
   try {
     const user = req.user;
     const taskId = req.params.id;
@@ -736,7 +742,7 @@ router.post('/:id/remind', requireRole('founder', 'admin'), validateBody(schemas
     }
 
     const { message } = req.body;
-    const sent = sendManualReminder(taskId, user.id, message);
+    const sent = await sendManualReminder(taskId, user.id, message);
 
     res.json({
       success: true,

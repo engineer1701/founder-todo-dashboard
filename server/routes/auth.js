@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const { rateLimit } = require('express-rate-limit');
 const { db } = require('../db/database');
 const { ApiError } = require('../middleware/errors');
-const { clearSessionCookie, issueSessionCookie, requireAuth, requireRole } = require('../middleware/auth');
+const { clearSessionCookie, issueSessionCookie, requireAuth, requireDevLogin, requireRole } = require('../middleware/auth');
 const { validateBody } = require('../middleware/validate');
 const { schemas } = require('../validation');
 
@@ -28,7 +28,11 @@ function getPublicUser(userId) {
 }
 
 function devToolsEnabled() {
-  return process.env.NODE_ENV === 'development' || process.env.ENABLE_DEV_TOOLS === 'true';
+  return process.env.NODE_ENV === 'development';
+}
+
+function devLoginEnabled() {
+  return process.env.NODE_ENV === 'development' && process.env.ENABLE_DEV_LOGIN === 'true';
 }
 
 router.post('/login', loginLimiter, validateBody(schemas.login), async (req, res) => {
@@ -44,7 +48,7 @@ router.post('/login', loginLimiter, validateBody(schemas.login), async (req, res
   }
 
   issueSessionCookie(res, user.id);
-  res.json({ success: true, user: getPublicUser(user.id), dev_tools_enabled: devToolsEnabled() });
+  res.json({ success: true, user: getPublicUser(user.id), dev_tools_enabled: devToolsEnabled(), dev_login_enabled: devLoginEnabled() });
 });
 
 router.post('/logout', validateBody(schemas.empty), (req, res) => {
@@ -53,7 +57,7 @@ router.post('/logout', validateBody(schemas.empty), (req, res) => {
 });
 
 router.get('/me', requireAuth, (req, res) => {
-  res.json({ success: true, user: getPublicUser(req.user.id), dev_tools_enabled: devToolsEnabled() });
+  res.json({ success: true, user: getPublicUser(req.user.id), dev_tools_enabled: devToolsEnabled(), dev_login_enabled: devLoginEnabled() });
 });
 
 router.get('/users', requireAuth, requireRole('founder', 'admin'), (req, res) => {
@@ -69,14 +73,11 @@ router.get('/users', requireAuth, requireRole('founder', 'admin'), (req, res) =>
 });
 
 router.get('/departments', requireAuth, requireRole('founder', 'admin'), (req, res) => {
-  const departments = db.prepare('SELECT * FROM departments WHERE status = "active"').all();
+  const departments = db.prepare("SELECT * FROM departments WHERE status = 'active'").all();
   res.json({ success: true, departments });
 });
 
-router.get('/dev-users', requireAuth, (req, res, next) => {
-  if (process.env.NODE_ENV !== 'development') {
-    return next(new ApiError(404, 'DEV_TOOLS_DISABLED', 'Developer tools are disabled.'));
-  }
+router.get('/dev-users', requireAuth, requireDevLogin, (req, res) => {
   const users = db.prepare(`
     SELECT u.id, u.name, u.email, u.role, u.department_id, u.designation, u.avatar_url, u.status,
            d.name AS department_name
@@ -88,14 +89,11 @@ router.get('/dev-users', requireAuth, (req, res, next) => {
   res.json({ success: true, users });
 });
 
-router.post('/dev-login', validateBody(schemas.devLogin), (req, res, next) => {
-  if (process.env.NODE_ENV !== 'development') {
-    return next(new ApiError(404, 'DEV_TOOLS_DISABLED', 'Developer tools are disabled.'));
-  }
+router.post('/dev-login', requireDevLogin, validateBody(schemas.devLogin), (req, res, next) => {
   const user = db.prepare("SELECT id FROM users WHERE id = ? AND status = 'active'").get(req.body.user_id);
   if (!user) return next(new ApiError(404, 'NOT_FOUND', 'User not found.'));
   issueSessionCookie(res, user.id);
-  res.json({ success: true, user: getPublicUser(user.id), dev_tools_enabled: true });
+  res.json({ success: true, user: getPublicUser(user.id), dev_tools_enabled: true, dev_login_enabled: true });
 });
 
 module.exports = router;

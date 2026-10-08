@@ -169,7 +169,7 @@ router.post('/simulate-time', requireDevToolAccess, validateBody(schemas.simulat
     if (reset) {
       newOffset = 0;
     } else {
-      const current = db.prepare('SELECT value FROM system_config WHERE key = "simulated_now_offset_hours"').get();
+      const current = db.prepare("SELECT value FROM system_config WHERE key = 'simulated_now_offset_hours'").get();
       const currentOffset = current ? parseFloat(current.value) || 0 : 0;
       newOffset = currentOffset + (parseFloat(advance_hours) || 0);
     }

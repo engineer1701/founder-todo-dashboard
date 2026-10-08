@@ -243,19 +243,13 @@ export default function TaskDetailModal({
                     <select
                       className="form-select-full"
                       value={newStatus}
+                      disabled={!task.allowed_statuses?.length}
                       onChange={(e) => setNewStatus(e.target.value)}
                       id="update-status-select"
                     >
-                      <option value="New">New</option>
-                      <option value="Acknowledged">Acknowledged</option>
-                      <option value="In Progress">In Progress</option>
-                      <option value="Awaiting Information">Awaiting Information</option>
-                      <option value="On Hold">On Hold</option>
-                      <option value="Submitted for Review">Submitted for Review</option>
-                      <option value="Rework Required">Rework Required</option>
-                      <option value="Completed">Completed</option>
-                      <option value="Approved">Approved</option>
-                      <option value="Cancelled">Cancelled</option>
+                      {task.allowed_statuses?.map((status) => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
                     </select>
                   </div>
                   <div>
@@ -292,7 +286,7 @@ export default function TaskDetailModal({
                   <button
                     type="submit"
                     className="btn-primary"
-                    disabled={updatingStatus}
+                    disabled={updatingStatus || !task.allowed_statuses?.length}
                     id="submit-status-update-btn"
                   >
                     {updatingStatus ? 'Recording...' : 'Submit Progress Update & Reset Timer'}

@@ -4,6 +4,7 @@ const path = require('node:path');
 require('dotenv').config();
 const { assertSecurityEnvironment, requireAuth } = require('./middleware/auth');
 const { errorHandler } = require('./middleware/errors');
+const { csrfProtection } = require('./middleware/csrf');
 assertSecurityEnvironment();
 const { initDatabase } = require('./db/database');
 const { runReminderScan } = require('./services/reminderEngine');
@@ -13,14 +14,17 @@ initDatabase();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const allowedOrigins = [process.env.CLIENT_ORIGIN, process.env.APP_BASE_URL]
+  .filter(Boolean)
+  .flatMap((value) => value.split(','))
+  .map((value) => value.trim());
 
 // Middleware
 app.use(cors({
-  origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+  origin: allowedOrigins.length ? allowedOrigins : ['http://localhost:5000', 'http://localhost:5173'],
   credentials: true
 }));
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
 // Request logging
 app.use((req, res, next) => {
@@ -31,6 +35,7 @@ app.use((req, res, next) => {
 });
 
 // Public authentication endpoints
+app.use('/api', csrfProtection);
 app.use('/api/auth', require('./routes/auth'));
 
 // Health check endpoint

@@ -8,7 +8,12 @@ export default function AcceptanceTestsView() {
   const runTests = async () => {
     try {
       setRunning(true);
-      const res = await fetch('/api/tests/run');
+      const res = await fetch('/api/tests/run', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
       const data = await res.json();
       setTestResults(data);
     } catch (err) {

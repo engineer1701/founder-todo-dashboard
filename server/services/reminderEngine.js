@@ -360,7 +360,7 @@ function runReminderScan() {
 /**
  * Triggers a manual reminder for a task immediately.
  */
-function sendManualReminder(taskId, actorUserId, customMessage = null) {
+async function sendManualReminder(taskId, actorUserId, customMessage = null) {
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   if (!task) throw new Error('Task not found');
 
@@ -381,7 +381,7 @@ function sendManualReminder(taskId, actorUserId, customMessage = null) {
   const results = [];
 
   for (const assignee of assignees) {
-    const res = sendEmail({
+    const res = await sendEmail({
       taskId: task.id,
       recipientEmail: assignee.email,
       recipientName: assignee.name,

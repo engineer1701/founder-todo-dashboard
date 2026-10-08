@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const bcrypt = require('bcryptjs');
 const { runMigrations } = require('./migrate');
 
-const dbPath = path.join(__dirname, '..', 'data', 'tasks.db');
+const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '..', 'data', 'tasks.db');
 const schemaPath = path.join(__dirname, 'schema.sql');
 const seedPath = path.join(__dirname, 'seed.sql');
 
@@ -38,10 +38,17 @@ function initDatabase() {
 
 function initializeSeedPasswords() {
   if (process.env.NODE_ENV === 'production') {
-    const admin = db.prepare("SELECT id, password_hash FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").get();
-    if (admin && !admin.password_hash) {
+    const emptyUsers = db.prepare('SELECT id, role FROM users WHERE password_hash IS NULL').all();
+    const emptyDemoUsers = emptyUsers.filter((user) => user.role !== 'admin');
+    if (emptyDemoUsers.length > 0 && !process.env.DEMO_USERS_PASSWORD) {
+      throw new Error('DEMO_USERS_PASSWORD is required to initialize seeded non-admin users in production.');
+    }
+    for (const user of emptyUsers) {
+      const password = user.role === 'admin'
+        ? process.env.ADMIN_INITIAL_PASSWORD
+        : process.env.DEMO_USERS_PASSWORD;
       db.prepare('UPDATE users SET password_hash = ? WHERE id = ?')
-        .run(bcrypt.hashSync(process.env.ADMIN_INITIAL_PASSWORD, 12), admin.id);
+        .run(bcrypt.hashSync(password, 12), user.id);
     }
     return;
   }

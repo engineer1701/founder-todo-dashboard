@@ -7,13 +7,16 @@
   "description": "Founder To-Do Allocation & Follow-Up Dashboard - Developer-Ready Product & Technical Specification",
   "main": "server/server.js",
   "scripts": {
-    "server": "cross-env NODE_ENV=development NODE_OPTIONS=--experimental-sqlite node server/server.js",
+    "server": "cross-env NODE_OPTIONS=--experimental-sqlite node server/server.js",
     "client": "npm --prefix client run dev",
     "dev": "cross-env NODE_ENV=development NODE_OPTIONS=--experimental-sqlite node server/server.js",
-    "start": "cross-env NODE_OPTIONS=--experimental-sqlite node server/server.js",
+    "start": "cross-env NODE_ENV=production NODE_OPTIONS=--experimental-sqlite node server/server.js",
     "setup": "npm install && npm --prefix client install",
     "build:client": "npm --prefix client run build",
-    "test:at": "cross-env NODE_OPTIONS=--experimental-sqlite node server/tests/runAcceptanceTests.js"
+    "test:at": "cross-env NODE_OPTIONS=--experimental-sqlite node server/tests/runAcceptanceTests.js",
+    "test:email": "cross-env NODE_OPTIONS=--experimental-sqlite node server/scripts/testEmail.js",
+    "add-test-employee": "cross-env NODE_OPTIONS=--experimental-sqlite node server/scripts/addTestEmployee.js",
+    "set-password": "cross-env NODE_OPTIONS=--experimental-sqlite node server/scripts/setPassword.js"
   },
   "keywords": [
     "task-management",
@@ -31,6 +34,7 @@
     "express-rate-limit": "^8.7.0",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.4.0",
+    "nodemailer": "^10.0.16",
     "zod": "^4.6.5"
   },
   "devDependencies": {

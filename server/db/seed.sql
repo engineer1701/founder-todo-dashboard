@@ -41,3 +41,7 @@ INSERT OR IGNORE INTO system_config (key, value, updated_at) VALUES
 ('working_days', 'Mon,Tue,Wed,Thu,Fri', '2026-09-01 09:00:00'),
 ('app_base_url', 'http://localhost:5173', '2026-09-01 09:00:00'),
 ('simulated_now_offset_hours', '0', '2026-09-01 09:00:00');
+
+UPDATE email_templates
+SET body = replace(body, '{{task_link}}', '{{link}}')
+WHERE instr(body, '{{task_link}}') > 0;

@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const net = require('node:net');
 const jwt = require('jsonwebtoken');
 const { db } = require('../db/database');
 const { ApiError } = require('./errors');
@@ -19,6 +20,24 @@ function assertSecurityEnvironment() {
   if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) {
     throw new Error('SESSION_SECRET is required in production.');
   }
+  if (process.env.NODE_ENV === 'production'
+    && (process.env.ENABLE_DEV_LOGIN !== undefined || process.env.ENABLE_DEV_TOOLS !== undefined)) {
+    throw new Error('ENABLE_DEV_LOGIN and ENABLE_DEV_TOOLS must be unset in production.');
+  }
+}
+
+function isLoopbackRequest(req) {
+  const address = req.socket?.remoteAddress || '';
+  return address === '::1' || address === '127.0.0.1' || address.startsWith('::ffff:127.');
+}
+
+function requireDevLogin(req, res, next) {
+  if (process.env.NODE_ENV !== 'development'
+    || process.env.ENABLE_DEV_LOGIN !== 'true'
+    || !isLoopbackRequest(req)) {
+    return next(new ApiError(404, 'DEV_LOGIN_DISABLED', 'Developer login is disabled.'));
+  }
+  next();
 }
 
 function cookieOptions() {
@@ -103,6 +122,7 @@ module.exports = {
   clearSessionCookie,
   issueSessionCookie,
   requireAuth,
+  requireDevLogin,
   requireDevToolAccess,
   requireRole
 };

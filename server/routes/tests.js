@@ -5,8 +5,10 @@ const { runReminderScan, calculateTaskFlags } = require('../services/reminderEng
 const { sendEmail } = require('../services/emailService');
 const { logAudit } = require('../services/auditService');
 const { requireDevToolAccess } = require('../middleware/auth');
+const { validateBody } = require('../middleware/validate');
+const { schemas } = require('../validation');
 
-router.get('/run', requireDevToolAccess, async (req, res, next) => {
+router.post('/run', requireDevToolAccess, validateBody(schemas.empty), async (req, res, next) => {
   const results = [];
   function assert(condition, message) {
     if (!condition) throw new Error(message);
@@ -57,7 +59,7 @@ router.get('/run', requireDevToolAccess, async (req, res, next) => {
 
       // Trigger assignment email
       const rahul = db.prepare('SELECT * FROM users WHERE id = 3').get();
-      const mailRes = sendEmail({
+      const mailRes = await sendEmail({
         taskId,
         recipientEmail: rahul.email,
         recipientName: rahul.name,

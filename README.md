@@ -67,13 +67,10 @@ npm run build:client
 ### Running the Application
 ```bash
 # Start the development server on http://localhost:5000
-npm run server
+npm run dev
 ```
 
-The application is immediately accessible at:
-👉 **`http://localhost:5000`**
-
-*(For live frontend HMR during UI development, run `npm run client` concurrently on port 5173.)*
+The unified application is accessible at `http://localhost:5000`. For live frontend HMR, run `npm run client` concurrently; the Vite app is available at `http://localhost:5173`. Both origins are allowed by default.
 
 ---
 
@@ -117,11 +114,14 @@ The database comes pre-seeded with realistic team members for testing:
 | **Amit Verma** | `employee` | `amit.verma@company.internal` | Growth & Marketing |
 | **Neha Gupta** | `employee` | `neha.gupta@company.internal` | Customer Operations |
 
-Development seed accounts all use the password `FounderDev2026!` unless `DEV_SEED_PASSWORD` is set. This development-only default is not assigned in production. The persona switcher is a development tool and is hidden outside development mode.
+Development seed accounts use the password configured by `DEV_SEED_PASSWORD` (default `FounderDev2026!`). This development-only default is never assigned in production. Use the normal email/password login locally with `npm run dev`. The optional persona switcher is disabled by default; enable it only on a local loopback server by setting `ENABLE_DEV_LOGIN=true`.
 
-Production requires `SESSION_SECRET` and `ADMIN_INITIAL_PASSWORD`. Set them in the environment or `.env` before starting with `NODE_ENV=production`; startup refuses to proceed if either is missing. The initial password is assigned to the seeded Admin account only when it has no password hash.
+Production requires `SESSION_SECRET` and `ADMIN_INITIAL_PASSWORD`; `DEMO_USERS_PASSWORD` is required when seeded non-admin accounts have empty password hashes. `npm start` sets `NODE_ENV=production`; startup refuses to proceed if `ENABLE_DEV_LOGIN` or `ENABLE_DEV_TOOLS` is present, so remove both variables from the production environment. Use `npm run set-password -- <email>` to set a user's password in an existing database. The password prompt does not echo the password.
 
 Copy `.env.example` to `.env` for local configuration. Replace the example session secret before using the app beyond local development.
+
+### Email setup
+Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, and `MAIL_FROM` in `.env` to enable SMTP delivery. Use port 587 with `SMTP_SECURE=false` or port 465 with `SMTP_SECURE=true`, as required by your provider. Keep SMTP credentials private and out of source control. When `SMTP_HOST` is empty, messages are recorded in the in-app outbox with status `simulated`. Test delivery with `npm run test:email -- you@example.com`.
 
 ---
 
