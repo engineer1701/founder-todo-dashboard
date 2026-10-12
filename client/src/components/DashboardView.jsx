@@ -22,6 +22,7 @@ export default function DashboardView({
   loading,
   users,
   departments,
+  currentUser,
   onRefresh,
   onOpenCreateModal,
   onSelectTask,
@@ -37,6 +38,67 @@ export default function DashboardView({
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [noUpdateOnly, setNoUpdateOnly] = useState(false);
   const [overdueOnly, setOverdueOnly] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [editMessage, setEditMessage] = useState({ type: '', text: '' });
+
+  const isManager = ['founder', 'admin'].includes(currentUser?.role);
+
+  const formatForInput = (value) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  };
+
+  const openEditTask = (task) => {
+    setEditingTaskId(task.id);
+    setEditMessage({ type: '', text: '' });
+    setEditForm({
+      title: task.title || '',
+      description: task.description || '',
+      instructions: task.instructions || '',
+      priority: task.priority || 'Medium',
+      start_at: formatForInput(task.start_at),
+      deadline_at: formatForInput(task.deadline_at),
+      reminder_policy_id: task.reminder_policy_id || '',
+      email_notifications_enabled: Boolean(task.email_notifications_enabled)
+    });
+  };
+
+  const saveEditTask = async (task) => {
+    try {
+      setEditMessage({ type: '', text: '' });
+      const payload = {
+        title: editForm.title,
+        description: editForm.description,
+        instructions: editForm.instructions,
+        priority: editForm.priority,
+        start_at: editForm.start_at || null,
+        deadline_at: editForm.deadline_at || null,
+        reminder_policy_id: editForm.reminder_policy_id ? Number(editForm.reminder_policy_id) : null,
+        email_notifications_enabled: !!editForm.email_notifications_enabled
+      };
+
+      const res = await fetch(`/api/tasks/${task.id}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data?.error?.message || data?.error || 'Failed to save task');
+      }
+
+      setEditMessage({ type: 'success', text: `Task ${task.id} updated successfully.` });
+      setEditingTaskId(null);
+      if (onRefresh) await onRefresh();
+    } catch (error) {
+      setEditMessage({ type: 'error', text: error.message || 'Task update failed.' });
+    }
+  };
 
   // Filter tasks locally or apply
   const summary = dashboardData?.summary || {
@@ -237,6 +299,12 @@ export default function DashboardView({
 
       {/* Search & Filter Toolbar */}
       <div className="toolbar-card">
+        {editMessage.text && (
+          <div style={{ marginBottom: '0.75rem', padding: '0.6rem 0.8rem', borderRadius: '0.5rem', fontSize: '0.85rem', fontWeight: 600, background: editMessage.type === 'success' ? '#dcfce7' : '#fee2e2', color: editMessage.type === 'success' ? '#166534' : '#991b1b' }}>
+            {editMessage.text}
+          </div>
+        )}
+
         <div className="search-input-wrap">
           <Search size={16} color="#94a3b8" />
           <input
@@ -507,7 +575,7 @@ export default function DashboardView({
                     </td>
 
                     <td style={{ textAlign: 'right' }}>
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                         <button
                           className="btn-secondary"
                           style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
@@ -517,6 +585,16 @@ export default function DashboardView({
                         >
                           <Send size={12} /> Nudge
                         </button>
+                        {isManager && (
+                          <button
+                            className="btn-secondary"
+                            style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                            onClick={() => openEditTask(task)}
+                            id={`edit-btn-${task.id}`}
+                          >
+                            Edit Task
+                          </button>
+                        )}
                         <button
                           className="btn-secondary"
                           style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
@@ -526,6 +604,91 @@ export default function DashboardView({
                           <Eye size={12} /> View
                         </button>
                       </div>
+
+                      {editingTaskId === task.id && (
+                        <div style={{ marginTop: '0.75rem', padding: '0.75rem', border: '1px solid #e2e8f0', borderRadius: '0.5rem', background: '#f8fafc', textAlign: 'left', minWidth: '280px' }}>
+                          <div style={{ display: 'grid', gap: '0.5rem' }}>
+                            <input
+                              type="text"
+                              value={editForm.title || ''}
+                              onChange={(e) => setEditForm((prev) => ({ ...prev, title: e.target.value }))}
+                              placeholder="Title"
+                              style={{ padding: '0.5rem 0.6rem', border: '1px solid #cbd5e1', borderRadius: '0.35rem' }}
+                            />
+                            <textarea
+                              value={editForm.description || ''}
+                              onChange={(e) => setEditForm((prev) => ({ ...prev, description: e.target.value }))}
+                              placeholder="Description"
+                              rows={3}
+                              style={{ padding: '0.5rem 0.6rem', border: '1px solid #cbd5e1', borderRadius: '0.35rem', resize: 'vertical' }}
+                            />
+                            <textarea
+                              value={editForm.instructions || ''}
+                              onChange={(e) => setEditForm((prev) => ({ ...prev, instructions: e.target.value }))}
+                              placeholder="Instructions"
+                              rows={3}
+                              style={{ padding: '0.5rem 0.6rem', border: '1px solid #cbd5e1', borderRadius: '0.35rem', resize: 'vertical' }}
+                            />
+
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                              <select
+                                value={editForm.priority || 'Medium'}
+                                onChange={(e) => setEditForm((prev) => ({ ...prev, priority: e.target.value }))}
+                                style={{ padding: '0.5rem 0.6rem', border: '1px solid #cbd5e1', borderRadius: '0.35rem' }}
+                              >
+                                <option value="Critical">Critical</option>
+                                <option value="High">High</option>
+                                <option value="Medium">Medium</option>
+                                <option value="Low">Low</option>
+                              </select>
+
+                              <select
+                                value={editForm.reminder_policy_id ?? ''}
+                                onChange={(e) => setEditForm((prev) => ({ ...prev, reminder_policy_id: e.target.value }))}
+                                style={{ padding: '0.5rem 0.6rem', border: '1px solid #cbd5e1', borderRadius: '0.35rem' }}
+                              >
+                                <option value="">Default Policy</option>
+                                <option value="1">Standard</option>
+                                <option value="2">Urgent</option>
+                                <option value="3">Relaxed</option>
+                              </select>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                              <input
+                                type="datetime-local"
+                                value={editForm.start_at || ''}
+                                onChange={(e) => setEditForm((prev) => ({ ...prev, start_at: e.target.value }))}
+                                style={{ padding: '0.5rem 0.6rem', border: '1px solid #cbd5e1', borderRadius: '0.35rem' }}
+                              />
+                              <input
+                                type="datetime-local"
+                                value={editForm.deadline_at || ''}
+                                onChange={(e) => setEditForm((prev) => ({ ...prev, deadline_at: e.target.value }))}
+                                style={{ padding: '0.5rem 0.6rem', border: '1px solid #cbd5e1', borderRadius: '0.35rem' }}
+                              />
+                            </div>
+
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', fontWeight: 600 }}>
+                              <input
+                                type="checkbox"
+                                checked={!!editForm.email_notifications_enabled}
+                                onChange={(e) => setEditForm((prev) => ({ ...prev, email_notifications_enabled: e.target.checked }))}
+                              />
+                              Email notifications enabled
+                            </label>
+
+                            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                              <button className="btn-secondary" style={{ padding: '0.4rem 0.7rem', fontSize: '0.75rem' }} onClick={() => setEditingTaskId(null)}>
+                                Cancel
+                              </button>
+                              <button className="btn-primary" style={{ padding: '0.4rem 0.7rem', fontSize: '0.75rem' }} onClick={() => saveEditTask(task)}>
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );

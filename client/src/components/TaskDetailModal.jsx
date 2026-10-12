@@ -25,6 +25,8 @@ export default function TaskDetailModal({
   onUpdateStatus,
   onAddComment,
   onAddAttachment,
+  onCreateTaskRequest,
+  onReviewTaskRequest,
   onManualRemind,
   onReassign
 }) {
@@ -42,6 +44,17 @@ export default function TaskDetailModal({
   // Comment input state
   const [commentText, setCommentText] = useState('');
   const [addingComment, setAddingComment] = useState(false);
+
+  // Attachment upload state
+  const [attachmentFile, setAttachmentFile] = useState(null);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [attachmentMessage, setAttachmentMessage] = useState({ type: '', text: '' });
+
+  // Request state
+  const [requestForm, setRequestForm] = useState({ request_type: 'CLARIFICATION', message: '', requested_deadline: '' });
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+  const [requestError, setRequestError] = useState('');
+  const [reviewNote, setReviewNote] = useState({});
 
   // Reassign state
   const [showReassign, setShowReassign] = useState(false);
@@ -117,6 +130,42 @@ export default function TaskDetailModal({
       await fetchDetail();
     } catch (err) {
       alert('Error reassigning: ' + err.message);
+    }
+  };
+
+  const handleAttachmentSubmit = async (e) => {
+    e.preventDefault();
+    if (!attachmentFile) {
+      setAttachmentMessage({ type: 'error', text: 'Choose a file to upload.' });
+      return;
+    }
+
+    try {
+      setUploadingAttachment(true);
+      setAttachmentMessage({ type: '', text: '' });
+      const formData = new FormData();
+      formData.append('file', attachmentFile);
+      formData.append('file_name', attachmentFile.name);
+      formData.append('file_size', String(attachmentFile.size));
+      formData.append('file_type', attachmentFile.type || 'application/octet-stream');
+
+      const res = await fetch(`/api/tasks/${taskId}/attachments`, {
+        method: 'POST',
+        credentials: 'include',
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data?.error?.message || data?.error || 'Upload failed');
+      }
+
+      setAttachmentFile(null);
+      setAttachmentMessage({ type: 'success', text: 'Attachment uploaded.' });
+      await fetchDetail();
+    } catch (err) {
+      setAttachmentMessage({ type: 'error', text: err.message || 'Upload failed.' });
+    } finally {
+      setUploadingAttachment(false);
     }
   };
 
@@ -374,6 +423,136 @@ export default function TaskDetailModal({
                     <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Primary Assignee</span>
                     <div style={{ fontWeight: 600 }}>{task.primary_assignee?.name || 'Unassigned'}</div>
                   </div>
+                </div>
+
+                <div style={{ background: '#f8fafc', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.75rem' }}>
+                    <FileText size={15} />
+                    <strong>Clarification & Extension Requests</strong>
+                  </div>
+
+                  {!isFounderOrAdmin && (
+                    <form onSubmit={handleRequestSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '1rem' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <select
+                          className="filter-select"
+                          value={requestForm.request_type}
+                          onChange={(e) => setRequestForm({ ...requestForm, request_type: e.target.value })}
+                          style={{ minWidth: '180px' }}
+                        >
+                          <option value="CLARIFICATION">Clarification</option>
+                          <option value="EXTENSION">Extension Request</option>
+                        </select>
+                        {requestForm.request_type === 'EXTENSION' && (
+                          <input
+                            type="datetime-local"
+                            className="form-input"
+                            value={requestForm.requested_deadline}
+                            onChange={(e) => setRequestForm({ ...requestForm, requested_deadline: e.target.value })}
+                          />
+                        )}
+                      </div>
+                      <textarea
+                        className="form-input"
+                        rows={3}
+                        placeholder="Describe the blocker or the requested extension..."
+                        value={requestForm.message}
+                        onChange={(e) => setRequestForm({ ...requestForm, message: e.target.value })}
+                      />
+                      {requestError && <div style={{ color: '#b91c1c', fontSize: '0.75rem' }}>{requestError}</div>}
+                      <button type="submit" className="btn-primary" disabled={submittingRequest} style={{ alignSelf: 'flex-start' }}>
+                        {submittingRequest ? 'Submitting...' : 'Submit Request'}
+                      </button>
+                    </form>
+                  )}
+
+                  {task.requests?.length ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                      {task.requests.map((request) => (
+                        <div key={request.id} style={{ background: '#fff', border: '1px solid var(--border-subtle)', borderRadius: '0.5rem', padding: '0.7rem 0.8rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', marginBottom: '0.45rem' }}>
+                            <strong>{request.request_type === 'EXTENSION' ? 'Extension Request' : 'Clarification Request'}</strong>
+                            <span className="badge badge-hold" style={{ fontWeight: 700 }}>{request.status}</span>
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                            Requested by {request.requested_by_name} · {new Date(request.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
+                          </div>
+                          <div style={{ fontSize: '0.8rem', marginBottom: '0.35rem' }}>{request.message}</div>
+                          {request.requested_deadline && (
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                              Requested deadline: {new Date(request.requested_deadline).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}
+                            </div>
+                          )}
+                          {isFounderOrAdmin && request.status === 'PENDING' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.6rem' }}>
+                              <textarea
+                                className="form-input"
+                                rows={2}
+                                placeholder="Optional decision note"
+                                value={reviewNote[request.id] || ''}
+                                onChange={(e) => setReviewNote((prev) => ({ ...prev, [request.id]: e.target.value }))}
+                              />
+                              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <button type="button" className="btn-primary" onClick={() => handleReviewRequest(request.id, 'APPROVED')}>Approve</button>
+                                <button type="button" className="btn-secondary" onClick={() => handleReviewRequest(request.id, 'REJECTED')}>Reject</button>
+                              </div>
+                            </div>
+                          )}
+                          {request.reviewed_by_name && (
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                              Reviewed by {request.reviewed_by_name} · {request.decision_note || 'No note'}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No clarification or extension requests yet.</div>
+                  )}
+                </div>
+
+                <div style={{ background: '#f8fafc', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0.85rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.75rem' }}>
+                    <Paperclip size={15} />
+                    <strong>Attachments</strong>
+                  </div>
+
+                  <form onSubmit={handleAttachmentSubmit} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                    <input
+                      type="file"
+                      onChange={(e) => setAttachmentFile(e.target.files?.[0] || null)}
+                      style={{ flex: 1, minWidth: '220px' }}
+                    />
+                    <button type="submit" className="btn-primary" disabled={uploadingAttachment}>
+                      {uploadingAttachment ? 'Uploading...' : 'Upload'}
+                    </button>
+                  </form>
+
+                  {attachmentMessage.text && (
+                    <div style={{ marginBottom: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '0.35rem', background: attachmentMessage.type === 'success' ? '#dcfce7' : '#fee2e2', color: attachmentMessage.type === 'success' ? '#166534' : '#991b1b', fontSize: '0.8rem', fontWeight: 600 }}>
+                      {attachmentMessage.text}
+                    </div>
+                  )}
+
+                  {task.attachments?.length ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {task.attachments.map((attachment) => (
+                        <div key={attachment.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid var(--border-subtle)', borderRadius: '0.5rem', padding: '0.55rem 0.7rem' }}>
+                          <div>
+                            <div style={{ fontWeight: 600 }}>{attachment.file_name}</div>
+                            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                              {attachment.file_type} · {(attachment.file_size || 0) / 1024 < 1 ? `${attachment.file_size || 0} B` : `${Math.round(((attachment.file_size || 0) / 1024) * 10) / 10} KB`}
+                            </div>
+                          </div>
+                          <a href={`/api/tasks/${task.id}/attachments/${attachment.id}/download`} target="_blank" rel="noreferrer" className="btn-secondary" style={{ padding: '0.4rem 0.7rem', fontSize: '0.75rem' }}>
+                            Download
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No attachments uploaded yet.</div>
+                  )}
                 </div>
               </div>
             )}

@@ -52,6 +52,15 @@ const schemas = {
     progress_pct: z.coerce.number().int().min(0).max(100).optional()
   }),
   comment: z.object({ comment: z.string().trim().min(1).max(5000) }),
+  taskRequest: z.object({
+    request_type: z.enum(['CLARIFICATION', 'EXTENSION']),
+    message: z.string().trim().min(1).max(5000),
+    requested_deadline: z.string().max(100).nullable().optional()
+  }),
+  taskRequestReview: z.object({
+    status: z.enum(['APPROVED', 'REJECTED']),
+    decision_note: z.string().trim().max(5000).optional()
+  }),
   remind: z.object({ message: z.string().max(2000).optional() }),
   attachment: z.object({
     file_name: z.string().trim().min(1).max(255),

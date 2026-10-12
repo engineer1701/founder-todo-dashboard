@@ -76,12 +76,17 @@ The unified application is accessible at `http://localhost:5000`. For live front
 
 ## 🧪 Acceptance Test Suite (AT-01 to AT-12)
 
-The system includes a verified, 12-point acceptance test suite verifying all core user stories:
+The project ships with a 12-point acceptance suite. The current branch is under a working-hours adjustment pass, so the latest live validation status is tracked below rather than claiming a stale green run.
 
 ```bash
 # Run acceptance test suite in terminal
 npm run test:at
 ```
+
+### Current Live Validation Status
+- `npm run build:client` — passes
+- `npm run test:at` — currently 10/12 tests passing
+- Remaining failing checks are the inactivity escalation scenarios (`AT-03`, `AT-08`) while the business-hours timer is being refined
 
 ### Test Coverage Summary:
 - **AT-01:** Founder creates a task and assigns it to an employee.
@@ -125,7 +130,26 @@ Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, and `MAIL
 
 ---
 
-## 📚 Complete Technical Documentation
+## � Deployment & Environment Checklist
+
+For a local or production deployment, ensure the following before starting the app:
+
+```bash
+cp .env.example .env
+npm install
+npm --prefix client install
+npm run build:client
+npm run dev
+```
+
+Production checklist:
+- Set `NODE_ENV=production`
+- Set `SESSION_SECRET` to a long random value
+- Set `ADMIN_INITIAL_PASSWORD` and `DEMO_USERS_PASSWORD` as required
+- Provide SMTP credentials or leave `SMTP_HOST` empty for simulated in-app email capture
+- Ensure the database path is writable and the uploads directory exists outside the web root
+
+## �📚 Complete Technical Documentation
 
 For the full developer specification and architectural designs, review:
 - 📖 [Product & Technical Specification](docs/PRODUCT_SPECIFICATION.md)

@@ -22,6 +22,9 @@ export default function App() {
   const [policies, setPolicies] = useState([]);
   const [dashboardData, setDashboardData] = useState(null);
   const [tasks, setTasks] = useState([]);
+  const [taskPage, setTaskPage] = useState(1);
+  const [taskPageSize, setTaskPageSize] = useState(10);
+  const [taskPagination, setTaskPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: 10 });
   const [loading, setLoading] = useState(true);
   const [schedulerRunning, setSchedulerRunning] = useState(false);
   const [timeOffsetHours, setTimeOffsetHours] = useState(0);
@@ -82,7 +85,8 @@ export default function App() {
       if (!currentUser) return;
       setLoading(true);
       const isManager = ['founder', 'admin'].includes(currentUser.role);
-      const requests = [fetch('/api/tasks', { credentials: 'include' })];
+      const taskQuery = new URLSearchParams({ page: String(taskPage), limit: String(taskPageSize) });
+      const requests = [fetch(`/api/tasks?${taskQuery.toString()}`, { credentials: 'include' })];
       if (isManager) requests.unshift(fetch('/api/dashboard', { credentials: 'include' }));
       const responses = await Promise.all(requests);
       const dashData = isManager ? await responses[0].json() : null;
@@ -90,7 +94,15 @@ export default function App() {
       const tasksData = await tasksRes.json();
 
       setDashboardData(dashData?.success ? dashData : null);
-      if (tasksData.success) setTasks(tasksData.tasks);
+      if (tasksData.success) {
+        setTasks(tasksData.tasks);
+        setTaskPagination({
+          page: tasksData.page || 1,
+          totalPages: tasksData.totalPages || 1,
+          total: tasksData.total || 0,
+          limit: tasksData.limit || taskPageSize
+        });
+      }
     } catch (err) {
       console.error('Error loading tasks:', err);
     } finally {
@@ -107,7 +119,7 @@ export default function App() {
       if (currentUser.role === 'employee') setActiveNav('employee');
       fetchDashboardAndTasks();
     }
-  }, [currentUser]);
+  }, [currentUser, taskPage, taskPageSize]);
 
   // Check URL parameters for direct task deep links (?task=TASK-101) - AT-11
   useEffect(() => {
@@ -181,6 +193,57 @@ export default function App() {
     }
     addToast('Comment added', 'info');
     await fetchDashboardAndTasks();
+  };
+
+  // Add Attachment Handler
+  const handleAddAttachment = async (taskId, file) => {
+    if (!file) throw new Error('No file selected');
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`/api/tasks/${taskId}/attachments`, {
+      method: 'POST',
+      credentials: 'include',
+      body: formData
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(apiErrorMessage(data, 'Failed to upload attachment'));
+    }
+    addToast(`Attachment uploaded: ${data.file_name}`, 'success');
+    await fetchDashboardAndTasks();
+    return data;
+  };
+
+  const handleCreateTaskRequest = async (taskId, payload) => {
+    const res = await fetch(`/api/tasks/${taskId}/requests`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(apiErrorMessage(data, 'Failed to submit request'));
+    }
+    addToast(`Request sent: ${payload.request_type.toLowerCase()}`, 'success');
+    await fetchDashboardAndTasks();
+    return data;
+  };
+
+  const handleReviewTaskRequest = async (taskId, requestId, status, decisionNote = '') => {
+    const res = await fetch(`/api/tasks/${taskId}/requests/${requestId}`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, decision_note: decisionNote })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(apiErrorMessage(data, 'Failed to review request'));
+    }
+    addToast(`Request ${status.toLowerCase()}`, 'info');
+    await fetchDashboardAndTasks();
+    return data;
   };
 
   // Manual Nudge / Reminder Handler
@@ -326,6 +389,7 @@ export default function App() {
             loading={loading}
             users={users}
             departments={departments}
+            currentUser={currentUser}
             onRefresh={fetchDashboardAndTasks}
             onOpenCreateModal={() => setIsCreateModalOpen(true)}
             onSelectTask={(id) => setSelectedTaskId(id)}
@@ -343,6 +407,35 @@ export default function App() {
             onSelectTask={(id) => setSelectedTaskId(id)}
             onQuickUpdateStatus={handleUpdateStatus}
           />
+        )}
+
+        {taskPagination.totalPages > 1 && (
+          <div className="toolbar-card" style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              Showing {taskPagination.total ? (taskPagination.page - 1) * taskPagination.limit + 1 : 0}–{Math.min(taskPagination.page * taskPagination.limit, taskPagination.total)} of {taskPagination.total} tasks
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <button
+                className="btn-secondary"
+                id="task-page-prev"
+                disabled={taskPage <= 1}
+                onClick={() => setTaskPage((page) => Math.max(1, page - 1))}
+              >
+                Previous
+              </button>
+              <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>
+                Page {taskPagination.page} / {taskPagination.totalPages}
+              </span>
+              <button
+                className="btn-secondary"
+                id="task-page-next"
+                disabled={taskPage >= taskPagination.totalPages}
+                onClick={() => setTaskPage((page) => Math.min(taskPagination.totalPages, page + 1))}
+              >
+                Next
+              </button>
+            </div>
+          </div>
         )}
 
         {activeNav === 'reports' && (
@@ -380,6 +473,9 @@ export default function App() {
           onClose={() => setSelectedTaskId(null)}
           onUpdateStatus={handleUpdateStatus}
           onAddComment={handleAddComment}
+          onAddAttachment={handleAddAttachment}
+          onCreateTaskRequest={handleCreateTaskRequest}
+          onReviewTaskRequest={handleReviewTaskRequest}
           onManualRemind={handleManualRemind}
           onReassign={handleReassign}
         />

@@ -1,20 +1,24 @@
 # Founder To-Do Allocation & Follow-Up Dashboard
 ## Acceptance Test Execution Report (AT-01 to AT-12)
-**Execution Date:** 2 October 2026  
-**Test Suite Status:** 12/12 PASSED (100% Conformance)  
-**Execution Environment:** Windows x64, Node.js v22, SQLite 3 (WAL Mode)  
+**Execution Date:** 9 October 2026
+**Test Suite Status:** Current live validation = 10/12 passed; historical 12/12 report retained for reference only
+**Execution Environment:** Windows x64, Node.js v22, SQLite 3 (WAL Mode)
 
 ---
 
 ## 1. Executive Summary
 
-All 12 acceptance criteria specified for the Founder To-Do Allocation and Follow-Up Dashboard have been executed and verified through automated end-to-end test runners (`server/tests/runAcceptanceTests.js` and live API `/api/tests/run`).
+The project continues to run its automated acceptance checks, but the current working-hours adjustment branch is not yet fully green. The live validation run shows 10/12 tests passing, with the failures concentrated in inactivity threshold logic during the business-hours refinement.
 
 ```
 ===============================================================
-FINAL RESULTS: 12/12 ACCEPTANCE TESTS PASSED (0 FAILURES)
+FINAL RESULTS: 10/12 ACCEPTANCE TESTS PASSED (2 FAILURES)
 ===============================================================
 ```
+
+**Current failing checks:** `AT-03` and `AT-08`
+
+The earlier 12/12 result remains in this document as a historical reference only and should not be treated as the current status.
 
 ---
 

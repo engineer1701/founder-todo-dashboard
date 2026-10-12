@@ -2,6 +2,76 @@ const { db, getEffectiveNow, getEffectiveNowISO } = require('../db/database');
 const { sendEmail } = require('./emailService');
 const { logAudit } = require('./auditService');
 
+const HOUR_MS = 1000 * 3600;
+
+function getBusinessHoursConfig() {
+  const rows = db.prepare(`
+    SELECT key, value FROM system_config
+    WHERE key IN ('business_timezone', 'working_hours_start', 'working_hours_end')
+  `).all();
+
+  const config = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  const businessTimezone = config.business_timezone || 'Asia/Kolkata';
+  const startParts = String(config.working_hours_start || '09:30').split(':');
+  const endParts = String(config.working_hours_end || '18:30').split(':');
+
+  return {
+    timeZone: businessTimezone,
+    startMinutes: (Number(startParts[0]) || 0) * 60 + (Number(startParts[1]) || 0),
+    endMinutes: (Number(endParts[0]) || 0) * 60 + (Number(endParts[1]) || 0)
+  };
+}
+
+function isWithinBusinessHours(date, config = getBusinessHoursConfig()) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: config.timeZone,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+
+  const parts = formatter.formatToParts(date);
+  const timeMap = Object.fromEntries(parts.filter(p => p.type !== 'literal').map((part) => [part.type, part.value]));
+  const weekday = timeMap.weekday;
+  const hour = Number(timeMap.hour || 0);
+  const minute = Number(timeMap.minute || 0);
+  const minutes = hour * 60 + minute;
+
+  if (weekday === 'Sat' || weekday === 'Sun') return false;
+  return minutes >= config.startMinutes && minutes < config.endMinutes;
+}
+
+function getBusinessHoursBetween(startDate, endDate, config = getBusinessHoursConfig()) {
+  if (!startDate || !endDate || endDate <= startDate) return 0;
+
+  const rawHours = (endDate.getTime() - startDate.getTime()) / HOUR_MS;
+  let cursor = new Date(startDate.getTime());
+  let elapsedMinutes = 0;
+
+  while (cursor < endDate) {
+    if (isWithinBusinessHours(cursor, config)) {
+      elapsedMinutes += 1;
+    }
+    cursor = new Date(cursor.getTime() + 60000);
+  }
+
+  const businessHours = elapsedMinutes / 60;
+  if (rawHours >= 24) return rawHours;
+  if (businessHours <= 0 && rawHours > 0) return rawHours;
+  return businessHours;
+}
+
+/**
+ * Returns the start of the current inactivity cycle for a task.
+ * FIX: the old code passed task.last_progress_updated_at directly, which can be
+ * NULL for a task that was never updated. "sent_at >= NULL" never matches in SQL,
+ * so duplicate reminders could be sent on every scan. Fall back to created_at.
+ */
+function getCycleStart(task) {
+  return task.last_progress_updated_at || task.created_at;
+}
+
 /**
  * Checks whether a reminder of given type has already been sent for this task
  * since the last status/progress update (inactivity cycle idempotency).
@@ -15,7 +85,20 @@ function hasReminderBeenSentSince(taskId, reminderType, sinceIsoString) {
 }
 
 /**
+ * Returns the time of the most recent reminder of this type in the current
+ * inactivity cycle, or null if none was sent. Used for the repeat_enabled rule.
+ */
+function getLastReminderSentAt(taskId, reminderType, sinceIsoString) {
+  const row = db.prepare(`
+    SELECT MAX(COALESCE(sent_at, scheduled_at)) AS last_at FROM task_reminders
+    WHERE task_id = ? AND reminder_type = ? AND (sent_at >= ? OR scheduled_at >= ?)
+  `).get(taskId, reminderType, sinceIsoString, sinceIsoString);
+  return row && row.last_at ? new Date(row.last_at) : null;
+}
+
+/**
  * Checks whether a deadline reminder (approaching or overdue) was already sent for this task.
+ * Kept for backward compatibility with any other file that imports it.
  */
 function hasTaskReminderType(taskId, reminderType) {
   const existing = db.prepare(`
@@ -26,30 +109,76 @@ function hasTaskReminderType(taskId, reminderType) {
 }
 
 /**
+ * FIX (#11): deadline alerts are de-duplicated per task + type + the deadline
+ * value in effect. The deadline value is stored in task_reminders.cycle_id.
+ * Same deadline => never alerts twice. Changed deadline => a new alert is allowed.
+ */
+function hasDeadlineReminderForDeadline(taskId, reminderType, deadlineAt) {
+  const existing = db.prepare(`
+    SELECT COUNT(*) as count FROM task_reminders
+    WHERE task_id = ? AND reminder_type = ? AND cycle_id = ?
+  `).get(taskId, reminderType, String(deadlineAt));
+  return existing && existing.count > 0;
+}
+
+/**
+ * Reads the reminder policy numbers from a task row.
+ * FIX (#10): uses ?? instead of ||, so a configured 0 is kept and only
+ * null/undefined (no policy, or missing value) falls back to the default.
+ */
+function getPolicyThresholds(task) {
+  return {
+    firstHours: task.first_reminder_hours ?? 24,
+    secondHours: task.second_reminder_hours ?? 48,
+    escalationHours: task.escalation_hours ?? 72,
+    deadlineHours: task.deadline_reminder_hours ?? 12
+  };
+}
+
+/**
+ * FIX (#10): repeat_enabled from the reminder policy.
+ * 1/true => reminders may repeat. 0/false/null (no policy) => each stage fires once per cycle.
+ */
+function isRepeatEnabled(task) {
+  return Number(task.repeat_enabled) === 1 || task.repeat_enabled === true;
+}
+
+/**
+ * Decides whether an inactivity reminder of this type should be sent now.
+ * - Nothing sent yet in this cycle  => send.
+ * - Already sent and repeat off     => do not send (once per cycle).
+ * - Already sent and repeat on      => send again only after the repeat interval.
+ */
+function shouldSendInactivityReminder(task, reminderType, cycleStart, now, repeatEnabled, repeatIntervalHours) {
+  const last = getLastReminderSentAt(task.id, reminderType, cycleStart);
+  if (!last) return true;
+  if (!repeatEnabled) return false;
+  return (now.getTime() - last.getTime()) / HOUR_MS >= repeatIntervalHours;
+}
+
+/**
  * Calculates real-time computed flags for a task without mutating base status.
  */
 function calculateTaskFlags(task, effectiveNow = null) {
   const now = effectiveNow || getEffectiveNow();
   const deadline = new Date(task.deadline_at);
-  const lastProgress = new Date(task.last_progress_updated_at || task.created_at);
+  const cycleStart = getCycleStart(task);
+  const lastProgress = new Date(cycleStart);
 
   const isTerminal = ['Completed', 'Approved', 'Cancelled'].includes(task.status);
   const isOverdue = !isTerminal && now.getTime() > deadline.getTime();
 
-  const hoursInactive = Math.max(0, (now.getTime() - lastProgress.getTime()) / (1000 * 3600));
+  const hoursInactive = Math.max(0, getBusinessHoursBetween(lastProgress, now));
 
-  // Determine policy thresholds (fallback to standard if missing)
-  const firstThreshold = task.first_reminder_hours !== undefined ? task.first_reminder_hours : 24;
-  const secondThreshold = task.second_reminder_hours !== undefined ? task.second_reminder_hours : 48;
-  const escalationThreshold = task.escalation_hours !== undefined ? task.escalation_hours : 72;
+  // Policy thresholds (default only when null/undefined; 0 is respected)
+  const { firstHours: firstThreshold } = getPolicyThresholds(task);
 
   const isNoUpdateAlert = !isTerminal && hoursInactive >= firstThreshold;
 
   // Determine current reminder stage in this update cycle
-  const sinceIso = task.last_progress_updated_at;
-  const hasEscalated = hasReminderBeenSentSince(task.id, 'ESCALATION', sinceIso);
-  const hasSecond = hasReminderBeenSentSince(task.id, 'SECOND_REMINDER', sinceIso);
-  const hasFirst = hasReminderBeenSentSince(task.id, 'FIRST_REMINDER', sinceIso);
+  const hasEscalated = hasReminderBeenSentSince(task.id, 'ESCALATION', cycleStart);
+  const hasSecond = hasReminderBeenSentSince(task.id, 'SECOND_REMINDER', cycleStart);
+  const hasFirst = hasReminderBeenSentSince(task.id, 'FIRST_REMINDER', cycleStart);
 
   let reminderStage = 'None';
   if (hasEscalated) {
@@ -62,8 +191,8 @@ function calculateTaskFlags(task, effectiveNow = null) {
     reminderStage = 'Threshold Reached (Pending Scheduler)';
   }
 
-  // Calculate deadline urgency
-  const hoursUntilDeadline = (deadline.getTime() - now.getTime()) / (1000 * 3600);
+  // Calculate deadline urgency in configured business hours
+  const hoursUntilDeadline = Math.max(0, getBusinessHoursBetween(now, deadline));
   let deadlineCategory = 'Upcoming';
   if (isOverdue) {
     deadlineCategory = 'Overdue';
@@ -94,6 +223,7 @@ function runReminderScan() {
     SELECT t.*, 
            rp.name as policy_name, rp.enabled as policy_enabled,
            rp.first_reminder_hours, rp.second_reminder_hours, rp.escalation_hours, rp.deadline_reminder_hours,
+           rp.repeat_enabled,
            u.name as creator_name, u.email as creator_email
     FROM tasks t
     LEFT JOIN reminder_policies rp ON t.reminder_policy_id = rp.id
@@ -121,16 +251,22 @@ function runReminderScan() {
       continue;
     }
 
-    const firstHours = task.first_reminder_hours || 24;
-    const secondHours = task.second_reminder_hours || 48;
-    const escalationHours = task.escalation_hours || 72;
-    const deadlineHours = task.deadline_reminder_hours || 12;
+    // FIX (#10): zero thresholds are honored
+    const { firstHours, secondHours, escalationHours, deadlineHours } = getPolicyThresholds(task);
 
-    const lastProgress = new Date(task.last_progress_updated_at || task.created_at);
+    // FIX (#10): repeat_enabled. When repeating, resend after the first-reminder
+    // interval (never shorter than 1 hour, so a 0 threshold cannot spam every scan).
+    const repeatEnabled = isRepeatEnabled(task);
+    const repeatIntervalHours = Math.max(firstHours, 1);
+
+    // FIX: never NULL, so duplicate checks always work
+    const cycleStart = getCycleStart(task);
+
+    const lastProgress = new Date(cycleStart);
     const deadline = new Date(task.deadline_at);
 
-    const hoursInactive = (effectiveNow.getTime() - lastProgress.getTime()) / (1000 * 3600);
-    const hoursUntilDeadline = (deadline.getTime() - effectiveNow.getTime()) / (1000 * 3600);
+    const hoursInactive = getBusinessHoursBetween(lastProgress, effectiveNow);
+    const hoursUntilDeadline = Math.max(0, getBusinessHoursBetween(effectiveNow, deadline));
 
     // Fetch primary and assigned users
     const assignees = db.prepare(`
@@ -162,8 +298,10 @@ function runReminderScan() {
     // RULE A: Inactivity Escalation (Threshold 3: Escalation Hours)
     // -------------------------------------------------------------
     if (hoursInactive >= escalationHours) {
-      const alreadyEscalated = hasReminderBeenSentSince(task.id, 'ESCALATION', task.last_progress_updated_at);
-      if (!alreadyEscalated) {
+      const sendEscalation = shouldSendInactivityReminder(
+        task, 'ESCALATION', cycleStart, effectiveNow, repeatEnabled, repeatIntervalHours
+      );
+      if (sendEscalation) {
         // Send escalation to Founder/Admin
         for (const admin of founderAdmins) {
           sendEmail({
@@ -184,7 +322,7 @@ function runReminderScan() {
             admin.id,
             nowIso,
             nowIso,
-            task.last_progress_updated_at,
+            cycleStart,
             JSON.stringify({ hoursInactive, escalatedTo: admin.email })
           );
         }
@@ -208,8 +346,10 @@ function runReminderScan() {
     // RULE B: Second Inactivity Reminder (Threshold 2: Second Reminder Hours)
     // -------------------------------------------------------------
     else if (hoursInactive >= secondHours) {
-      const alreadySentSecond = hasReminderBeenSentSince(task.id, 'SECOND_REMINDER', task.last_progress_updated_at);
-      if (!alreadySentSecond) {
+      const sendSecond = shouldSendInactivityReminder(
+        task, 'SECOND_REMINDER', cycleStart, effectiveNow, repeatEnabled, repeatIntervalHours
+      );
+      if (sendSecond) {
         if (primaryAssignee) {
           sendEmail({
             taskId: task.id,
@@ -229,7 +369,7 @@ function runReminderScan() {
             primaryAssignee.id,
             nowIso,
             nowIso,
-            task.last_progress_updated_at,
+            cycleStart,
             JSON.stringify({ hoursInactive })
           );
 
@@ -251,8 +391,10 @@ function runReminderScan() {
     // RULE C: First Inactivity Reminder (Threshold 1: First Reminder Hours)
     // -------------------------------------------------------------
     else if (hoursInactive >= firstHours) {
-      const alreadySentFirst = hasReminderBeenSentSince(task.id, 'FIRST_REMINDER', task.last_progress_updated_at);
-      if (!alreadySentFirst) {
+      const sendFirst = shouldSendInactivityReminder(
+        task, 'FIRST_REMINDER', cycleStart, effectiveNow, repeatEnabled, repeatIntervalHours
+      );
+      if (sendFirst) {
         if (primaryAssignee) {
           sendEmail({
             taskId: task.id,
@@ -272,7 +414,7 @@ function runReminderScan() {
             primaryAssignee.id,
             nowIso,
             nowIso,
-            task.last_progress_updated_at,
+            cycleStart,
             JSON.stringify({ hoursInactive })
           );
 
@@ -293,9 +435,10 @@ function runReminderScan() {
 
     // -------------------------------------------------------------
     // RULE D: Approaching Deadline Reminder
+    // FIX (#11): de-duplicated per task + type + current deadline value
     // -------------------------------------------------------------
     if (hoursUntilDeadline > 0 && hoursUntilDeadline <= deadlineHours) {
-      const alreadySentApproaching = hasTaskReminderType(task.id, 'DEADLINE_APPROACHING');
+      const alreadySentApproaching = hasDeadlineReminderForDeadline(task.id, 'DEADLINE_APPROACHING', task.deadline_at);
       if (!alreadySentApproaching && primaryAssignee) {
         sendEmail({
           taskId: task.id,
@@ -309,8 +452,15 @@ function runReminderScan() {
 
         db.prepare(`
           INSERT INTO task_reminders (task_id, recipient_user_id, reminder_type, scheduled_at, sent_at, status, attempt_count, cycle_id, metadata)
-          VALUES (?, ?, 'DEADLINE_APPROACHING', ?, ?, 'sent', 1, 'deadline', ?)
-        `).run(task.id, primaryAssignee.id, nowIso, nowIso, JSON.stringify({ hoursUntilDeadline }));
+          VALUES (?, ?, 'DEADLINE_APPROACHING', ?, ?, 'sent', 1, ?, ?)
+        `).run(
+          task.id,
+          primaryAssignee.id,
+          nowIso,
+          nowIso,
+          String(task.deadline_at),
+          JSON.stringify({ hoursUntilDeadline, deadlineAt: task.deadline_at })
+        );
 
         logAudit(task.id, primaryAssignee.id, 'DEADLINE_APPROACHING_SENT', { hoursUntilDeadline });
         report.remindersSent++;
@@ -319,14 +469,58 @@ function runReminderScan() {
           type: 'DEADLINE_APPROACHING',
           recipient: primaryAssignee.email
         });
+      } else if (alreadySentApproaching) {
+        report.skippedDuplicates++;
       }
     }
 
     // -------------------------------------------------------------
-    // RULE E: Overdue Deadline Reminder
+    // RULE E: Deadline Reached (sent once per task+deadline value)
     // -------------------------------------------------------------
     if (hoursUntilDeadline <= 0) {
-      const alreadySentOverdue = hasTaskReminderType(task.id, 'DEADLINE_OVERDUE');
+      const alreadySentReached = hasDeadlineReminderForDeadline(task.id, 'DEADLINE_REACHED', task.deadline_at);
+      if (!alreadySentReached && primaryAssignee) {
+        sendEmail({
+          taskId: task.id,
+          recipientEmail: primaryAssignee.email,
+          recipientName: primaryAssignee.name,
+          recipientUserId: primaryAssignee.id,
+          eventType: 'Deadline Reached',
+          templateKey: 'DEADLINE_REACHED',
+          variables: templateVars
+        });
+
+        db.prepare(`
+          INSERT INTO task_reminders (task_id, recipient_user_id, reminder_type, scheduled_at, sent_at, status, attempt_count, cycle_id, metadata)
+          VALUES (?, ?, 'DEADLINE_REACHED', ?, ?, 'sent', 1, ?, ?)
+        `).run(
+          task.id,
+          primaryAssignee.id,
+          nowIso,
+          nowIso,
+          String(task.deadline_at),
+          JSON.stringify({ deadlineAt: task.deadline_at })
+        );
+
+        logAudit(task.id, primaryAssignee.id, 'DEADLINE_REACHED_SENT', { deadlineAt: task.deadline_at });
+        report.remindersSent++;
+        report.actions.push({
+          taskId: task.id,
+          type: 'DEADLINE_REACHED',
+          recipient: primaryAssignee.email
+        });
+      } else if (alreadySentReached) {
+        report.skippedDuplicates++;
+      }
+    }
+
+    // -------------------------------------------------------------
+    // RULE F: Overdue Deadline Reminder
+    // Send only after Deadline Reached has been logged for the current deadline.
+    // FIX (#11): de-duplicated per task + type + current deadline value.
+    // -------------------------------------------------------------
+    if (hoursUntilDeadline <= 0 && hasDeadlineReminderForDeadline(task.id, 'DEADLINE_REACHED', task.deadline_at)) {
+      const alreadySentOverdue = hasDeadlineReminderForDeadline(task.id, 'DEADLINE_OVERDUE', task.deadline_at);
       if (!alreadySentOverdue && primaryAssignee) {
         sendEmail({
           taskId: task.id,
@@ -340,8 +534,15 @@ function runReminderScan() {
 
         db.prepare(`
           INSERT INTO task_reminders (task_id, recipient_user_id, reminder_type, scheduled_at, sent_at, status, attempt_count, cycle_id, metadata)
-          VALUES (?, ?, 'DEADLINE_OVERDUE', ?, ?, 'sent', 1, 'overdue', ?)
-        `).run(task.id, primaryAssignee.id, nowIso, nowIso, JSON.stringify({ hoursOverdue: Math.abs(hoursUntilDeadline) }));
+          VALUES (?, ?, 'DEADLINE_OVERDUE', ?, ?, 'sent', 1, ?, ?)
+        `).run(
+          task.id,
+          primaryAssignee.id,
+          nowIso,
+          nowIso,
+          String(task.deadline_at),
+          JSON.stringify({ hoursOverdue: Math.abs(hoursUntilDeadline), deadlineAt: task.deadline_at })
+        );
 
         logAudit(task.id, primaryAssignee.id, 'DEADLINE_OVERDUE_SENT', { hoursOverdue: Math.abs(hoursUntilDeadline) });
         report.remindersSent++;
@@ -350,6 +551,8 @@ function runReminderScan() {
           type: 'DEADLINE_OVERDUE',
           recipient: primaryAssignee.email
         });
+      } else if (alreadySentOverdue) {
+        report.skippedDuplicates++;
       }
     }
   }
@@ -423,5 +626,6 @@ module.exports = {
   runReminderScan,
   sendManualReminder,
   hasReminderBeenSentSince,
-  hasTaskReminderType
+  hasTaskReminderType,
+  hasDeadlineReminderForDeadline
 };
